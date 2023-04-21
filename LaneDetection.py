@@ -3,14 +3,13 @@ from nuscenes.map_expansion.map_api import NuScenesMap
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
+from pyquaternion import Quaternion
 
 ym_per_pix = 0.2873
 xm_per_pix = 0.02555
 
 
-def TransformImagePerspective(source_points, input_image):
-    bottom_width = source_points[2, 0] - source_points[3, 0]
-    height = source_points[2, 1] - source_points[0, 1]
+def TransformImagePerspective(source_points, input_image, bottom_width, height):
 
     destination_points = np.array([
         [0, 0],
@@ -262,11 +261,11 @@ def calculateCurvature(yRange, left_fit_cr):
         2 * left_fit_cr[0])
 
 
-def drawLine(img, left_fit, right_fit):
+def drawLine(img, left_fit, right_fit, Minv, height):
     """
     Draw the lane lines on the image `img` using the poly `left_fit` and `right_fit`.
     """
-    yMax = img.shape[0]
+    yMax = height
     ploty = np.linspace(0, yMax - 1, yMax)
     color_warp = np.zeros_like(img).astype(np.uint8)
 
@@ -286,6 +285,42 @@ def drawLine(img, left_fit, right_fit):
     newwarp = cv2.warpPerspective(color_warp, Minv, (img.shape[1], img.shape[0]))
     return cv2.addWeighted(img, 1, newwarp, 0.3, 0)
 
+def camera2body(cs_record, points):
+    # Transform camera to body frame.
+    points = np.dot(np.linalg.inv(Quaternion(cs_record['rotation']).rotation_matrix.T), points)
+    points = points + np.array(cs_record['translation']).reshape((-1, 1))
+
+    return points
+
+def display_offset(img, input, fontScale=2):
+    # unclear how it is defined
+    yRange = 719
+
+    # Calculate curvature
+    leftCurvature = calculateCurvature(yRange, left_fit_m)
+    rightCurvature = calculateCurvature(yRange, right_fit_m)
+
+    # Calculate vehicle center
+    xMax = img.shape[1] * xm_per_pix
+    yMax = img.shape[0] * ym_per_pix
+    vehicleCenter = xMax / 2
+    lineLeft = left_fit_m[0] * yMax ** 2 + left_fit_m[1] * yMax + left_fit_m[2]
+    lineRight = right_fit_m[0] * yMax ** 2 + right_fit_m[1] * yMax + right_fit_m[2]
+    lineMiddle = lineLeft + (lineRight - lineLeft) / 2
+    diffFromVehicle = lineMiddle - vehicleCenter
+    if diffFromVehicle > 0:
+        message = '{:.2f} m right'.format(diffFromVehicle)
+    else:
+        message = '{:.2f} m left'.format(-diffFromVehicle)
+
+    # Draw info
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    fontColor = (255, 255, 255)
+    cv2.putText(input, 'Left curvature: {:.0f} m'.format(leftCurvature), (50, 50), font, fontScale, fontColor, 2)
+    cv2.putText(input, 'Right curvature: {:.0f} m'.format(rightCurvature), (50, 120), font, fontScale, fontColor, 2)
+    cv2.putText(input, 'Vehicle is {} of center'.format(message), (50, 190), font, fontScale, fontColor, 2)
+
+    return input
 
 if __name__ == '__main__':
     # sensor_names = ["CAM_FRONT","CAM_BACK"]
@@ -295,17 +330,13 @@ if __name__ == '__main__':
     nusc = NuScenes(version='v1.0-mini', dataroot=root_path, verbose=True)
     nusc_map = NuScenesMap(dataroot=root_path, map_name='boston-seaport')
 
-    lower_limit = np.array([120, 150, 180])
-    upper_limit = np.array([220, 220, 220])
-    kernel = np.ones((15, 15), np.uint8)
-
     # Point order: Top-Left, Top-Right, Bottom-Left, Bottom-Right
     source_points = np.array([[680, 565], [970, 565], [1350, 900], [190, 900]], dtype="float32")
+    bottom_width = source_points[2, 0] - source_points[3, 0]
+    height = source_points[2, 1] - source_points[0, 1]
 
     sensor_filenames = GetFilenameList(sensor_names, scene_id)
     sensor_calibration_data = GetSensorCalibration(sensor_names, scene_id)
-
-    yRange = 719
 
     for sample_filenames in sensor_filenames:
         for sensor_filename, sensor_calibration in zip(sample_filenames, sensor_calibration_data):
@@ -319,18 +350,16 @@ if __name__ == '__main__':
             SobelY = absSobelThresh(useSChannel, orient='y', thresh_min=10, thresh_max=160)
 
             resultCombined = combineGradients(SobelX, SobelY)
-            # showImages(resultCombined, 1, 1, (15, 13), cmap='gray')
 
             # img = draw_polygon_on_image(source_points, image)
             # cv2.imwrite("polygonOnimage.jpg", img)
 
-            img_unwarp, Minv, M = TransformImagePerspective(source_points, resultCombined)
+            img_unwarp, Minv, M = TransformImagePerspective(source_points, resultCombined, bottom_width, height)
             left_fit, right_fit, left_fit_m, right_fit_m, _, _, _, _, _ = findLines(img_unwarp)
-            output = drawLine(image, left_fit, right_fit)
+            new_img = drawLine(image, left_fit, right_fit, Minv, int(height))
+            input_img = display_offset(image, new_img)
+            output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
 
-            # Calculate curvature
-            leftCurvature = calculateCurvature(yRange, left_fit_m)
-            rightCurvature = calculateCurvature(yRange, right_fit_m)
 
             #
             # histogram = hist(vis)
