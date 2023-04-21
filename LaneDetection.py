@@ -215,13 +215,36 @@ class LaneDetection:
         return (
             left_fit, right_fit, left_fit_m, right_fit_m, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
 
-    @staticmethod
-    def camera2body(cs_record, points):
-        # Transform camera to body frame.
-        points = np.dot(np.linalg.inv(Quaternion(cs_record['rotation']).rotation_matrix.T), points)
-        points = points + np.array(cs_record['translation']).reshape((-1, 1))
 
-        return points
+    def camera2body(self, img, sensor_calibration):
+        ''' Tranform pixel coordinates to the vehicle body frame '''
+        vehicle_coords_x_left = []
+        vehicle_coords_y_left = []
+        vehicle_coords_x_right = []
+        vehicle_coords_y_right = []
+        yMax = img.shape[0]
+        ploty = np.linspace(0, yMax - 1, yMax) * self.ym_per_pix
+        lineLeft = left_fit_m[0] * ploty ** 2 + left_fit_m[1] * ploty + left_fit_m[2]
+        lineRight = right_fit_m[0] * ploty ** 2 + right_fit_m[1] * ploty + right_fit_m[2]
+
+        intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
+        for l_x, r_x, y in zip(lineLeft, lineRight, ploty):
+            # camera_coords = np.dot(np.linalg.inv(intrinsic_matrix), np.array([l_u, l_v, 1]).reshape(3, 1))
+            camera_coords = np.array([y, l_x, 1]).reshape(3, 1)
+            # Transform camera to body frame.
+            points = np.dot(np.linalg.inv(Quaternion(sensor_calibration['rotation']).rotation_matrix.T), camera_coords)
+            points = points + np.array(sensor_calibration['translation']).reshape((-1, 1))
+            vehicle_coords_x_left.append(list(points[0]))
+            vehicle_coords_y_left.append(list(points[1]))
+
+            camera_coords = np.array([y, r_x, 1]).reshape(3, 1)
+            # Transform camera to body frame.
+            points = np.dot(np.linalg.inv(Quaternion(sensor_calibration['rotation']).rotation_matrix.T), camera_coords)
+            points = points + np.array(sensor_calibration['translation']).reshape((-1, 1))
+            vehicle_coords_x_right.append(list(points[0]))
+            vehicle_coords_y_right.append(list(points[1]))
+        print('ok')
+        # return points
 
     def display_offset(self, img, input, fontScale=2):
         # unclear how it is defined
@@ -319,6 +342,7 @@ if __name__ == '__main__':
             img_unwarp = lanedetection.perspective_transform(resultCombined)
             left_fit, right_fit, left_fit_m, right_fit_m, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
             new_img = lanedetection.drawLine(image, left_fit, right_fit)
+            lanedetection.camera2body(image, sensor_calibration)
             input_img = lanedetection.display_offset(image, new_img)
             output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
             utils.showImages(output)
