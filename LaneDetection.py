@@ -41,15 +41,16 @@ class LaneDetection:
         image_unwarped = cv2.warpPerspective(img, self.M, (int(self.bottom_width), int(self.height)))
         return image_unwarped
 
-    def draw_polygon_on_image(self, img, line_color=(0, 255, 0)):
-        points_num = len(self.source_points)
+    @staticmethod
+    def draw_polygon_on_image(source_points, img, line_color=(0, 255, 0)):
+        points_num = len(source_points)
         for inx in range(points_num):
             if inx < points_num - 1:
-                p1 = (int(self.source_points[inx][0]), int(self.source_points[inx][1]))
-                p2 = (int(self.source_points[inx + 1][0]), int(self.source_points[inx + 1][1]))
+                p1 = (int(source_points[inx][0]), int(source_points[inx][1]))
+                p2 = (int(source_points[inx + 1][0]), int(source_points[inx + 1][1]))
             else:
-                p1 = (int(self.source_points[inx][0]), int(self.source_points[inx][1]))
-                p2 = (int(self.source_points[0][0]), int(self.source_points[0][1]))
+                p1 = (int(source_points[inx][0]), int(source_points[inx][1]))
+                p2 = (int(source_points[0][0]), int(source_points[0][1]))
             cv2.line(img, p1, p2, line_color, 3)
 
         return img
@@ -285,6 +286,16 @@ class NuSceneProcessing:
         self.nusc = NuScenes(version='v1.0-mini', dataroot=root_path, verbose=True)
         self.nusc_map = NuScenesMap(dataroot=root_path, map_name='boston-seaport')
 
+    def get_samples(self):
+        '''get samples in a given scene'''
+        current_sample = self.nusc.get('sample', self.nusc.scene[self.scene_id]['first_sample_token'])
+        samples = []
+        while not current_sample["next"] == "":
+            samples.append(current_sample)
+            # Update the current sample with the next sample
+            current_sample = self.nusc.get('sample', current_sample["next"])
+        return samples
+
     def GetFilenameList(self):
         # Get the first sample in the selected scene
         current_sample = self.nusc.get('sample', self.nusc.scene[scene_id]['first_sample_token'])
@@ -303,10 +314,8 @@ class NuSceneProcessing:
             current_sample = self.nusc.get('sample', current_sample["next"])
         return filename_list
 
-    def GetSensorCalibration(self):
-        # Get the first sample in the selected scene
-        current_sample = self.nusc.get('sample', self.nusc.scene[scene_id]['first_sample_token'])
-
+    def GetSensorCalibration(self, current_sample):
+        '''Get the calibration data corresponding to the sample'''
         # Get the calibration data for each of the sensors
         calibration_data = []
         for sensor in self.camera_name:
@@ -315,31 +324,40 @@ class NuSceneProcessing:
 
         return calibration_data
 
+    def get_img_info(self, sample):
+        # read the front camera info
+        cam_token = sample['data'][self.camera_name[0]]
+        cam_front_data = self.nusc.get('sample_data', cam_token)
+        camera_calibration = self.nusc.get('calibrated_sensor', cam_front_data['calibrated_sensor_token'])
 
-def main(sample_filenames, sensor_calibration_data):
+        return cam_front_data, camera_calibration
+
+def main(current_sample):
     '''The main process to handel the image data'''
-    for sample_filename in sample_filenames:
-        for sensor_filename, sensor_calibration in zip(sample_filename, sensor_calibration_data):
-            image = cv2.imread(root_path + sensor_filename[0])
+    cam_front_data, camera_calibration = data.get_img_info(current_sample)
 
-            intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
-            undistort_img = cv2.undistort(image, intrinsic_matrix, None)
-            hls_img = cv2.cvtColor(undistort_img, cv2.COLOR_BGR2HLS)
-            useSChannel = hls_img[:, :, 2]
-            SobelX = lanedetection.absSobelThresh(useSChannel, thresh_min=10, thresh_max=160)
-            SobelY = lanedetection.absSobelThresh(useSChannel, orient='y', thresh_min=10, thresh_max=160)
+    cam_intrinsic = np.array(camera_calibration['camera_intrinsic'])
+    image = cv2.imread(root_path + cam_front_data["filename"])
 
-            resultCombined = lanedetection.combineGradients(SobelX, SobelY)
+    undistort_img = cv2.undistort(image, cam_intrinsic, None)
+    hls_img = cv2.cvtColor(undistort_img, cv2.COLOR_BGR2HLS)
+    useSChannel = hls_img[:, :, 2]
+    SobelX = lanedetection.absSobelThresh(useSChannel, thresh_min=10, thresh_max=160)
+    SobelY = lanedetection.absSobelThresh(useSChannel, orient='y', thresh_min=10, thresh_max=160)
 
-            img_unwarp = lanedetection.perspective_transform(resultCombined)
-            left_fit, right_fit, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
-            new_img = lanedetection.drawLine(image, left_fit, right_fit)
-            lanedetection.camera2body(image, sensor_calibration)
-            input_img = lanedetection.display_offset(image, new_img)
-            output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
-            utils.showImages(output)
-            plt.show()
-            print('ok')
+    resultCombined = lanedetection.combineGradients(SobelX, SobelY)
+
+    img_unwarp = lanedetection.perspective_transform(resultCombined)
+    left_fit, right_fit, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
+    new_img = lanedetection.drawLine(image, left_fit, right_fit)
+
+    # tranform lane lines to vehicle body frame
+    lanedetection.camera2body(image, camera_calibration)
+    input_img = lanedetection.display_offset(image, new_img)
+    output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
+    utils.showImages(output)
+    plt.show()
+    print('ok')
 
     cv2.destroyAllWindows()
 
@@ -351,7 +369,15 @@ if __name__ == '__main__':
     data = NuSceneProcessing(camera_name, scene_id, root_path)
     lanedetection = LaneDetection()
 
-    sample_filenames = data.GetFilenameList()
-    sensor_calibration_data = data.GetSensorCalibration()
+    # to process a single image or all images in a scene
+    single_img = True
 
-    main(sample_filenames, sensor_calibration_data)
+    samples = data.get_samples()
+    if single_img:
+        current_samples = samples[0]
+        main(current_samples)
+    else:
+        current_samples = samples
+        for current_sample in current_samples:
+            main(current_sample)
+
