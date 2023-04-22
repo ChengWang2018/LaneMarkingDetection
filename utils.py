@@ -1,6 +1,6 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
+
 
 def visualizeLanes(image, ax):
     """
@@ -47,3 +47,17 @@ def showImages(img, cols=1, rows=1, figsize=(15, 10), cmap=None):
         ax.imshow(img, cmap=cmap)
     ax.set_title('gradients')
     ax.axis('off')
+
+
+def plot_lanes(lanes_on_vehicle_coords):
+    ''' Plot left and right lanes '''
+    fig, ax = plt.subplots(1, 1)
+    for lane_on_vehicle_coords in lanes_on_vehicle_coords:
+        coord_x = []
+        coord_y = []
+        for coord in lane_on_vehicle_coords:
+            coord_x.append(coord[0][0])
+            coord_y.append(coord[1][0])
+        ax.plot(coord_x, coord_y, color='b')
+
+    plt.show()

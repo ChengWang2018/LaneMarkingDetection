@@ -12,6 +12,8 @@ matplotlib.use('TkAgg')
 
 class LaneDetection:
     def __init__(self):
+        self.right_fit_m = None
+        self.left_fit_m = None
         self.ym_per_pix = 0.2873
         self.xm_per_pix = 0.02555
 
@@ -150,12 +152,12 @@ class LaneDetection:
         out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
         # Find the peak of the left and right halves of the histogram
         # These will be the starting point for the left and right lines
-        midpoint = np.int(histogram.shape[0] / 2)
+        midpoint = int(histogram.shape[0] / 2)
         leftx_base = np.argmax(histogram[:midpoint])
         rightx_base = np.argmax(histogram[midpoint:]) + midpoint
 
         # Set height of windows
-        window_height = np.int(binary_warped.shape[0] / nwindows)
+        window_height = int(binary_warped.shape[0] / nwindows)
         # Identify the x and y positions of all nonzero pixels in the image
         nonzero = binary_warped.nonzero()
         nonzeroy = np.array(nonzero[0])
@@ -191,9 +193,9 @@ class LaneDetection:
             right_lane_inds.append(good_right_inds)
             # If you found > minpix pixels, recenter next window on their mean position
             if len(good_left_inds) > minpix:
-                leftx_current = np.int(np.mean(nonzerox[good_left_inds]))
+                leftx_current = int(np.mean(nonzerox[good_left_inds]))
             if len(good_right_inds) > minpix:
-                rightx_current = np.int(np.mean(nonzerox[good_right_inds]))
+                rightx_current = int(np.mean(nonzerox[good_right_inds]))
 
         # Concatenate the arrays of indices
         left_lane_inds = np.concatenate(left_lane_inds)
@@ -209,57 +211,55 @@ class LaneDetection:
         right_fit = np.polyfit(righty, rightx, 2)
 
         # Fit a second order polynomial to each
-        left_fit_m = np.polyfit(lefty * self.ym_per_pix, leftx * self.xm_per_pix, 2)
-        right_fit_m = np.polyfit(righty * self.ym_per_pix, rightx * self.xm_per_pix, 2)
+        self.left_fit_m = np.polyfit(lefty * self.ym_per_pix, leftx * self.xm_per_pix, 2)
+        self.right_fit_m = np.polyfit(righty * self.ym_per_pix, rightx * self.xm_per_pix, 2)
 
         return (
-            left_fit, right_fit, left_fit_m, right_fit_m, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
+            left_fit, right_fit, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
 
+    def get_left_right_lane(self, ploty):
+        lineLeft = self.left_fit_m[0] * ploty ** 2 + self.left_fit_m[1] * ploty + self.left_fit_m[2]
+        lineRight = self.right_fit_m[0] * ploty ** 2 + self.right_fit_m[1] * ploty + self.right_fit_m[2]
+
+        return lineLeft, lineRight
 
     def camera2body(self, img, sensor_calibration):
         ''' Tranform pixel coordinates to the vehicle body frame '''
-        vehicle_coords_x_left = []
-        vehicle_coords_y_left = []
-        vehicle_coords_x_right = []
-        vehicle_coords_y_right = []
+        lanes_on_vehicle_coords = []
+
         yMax = img.shape[0]
         ploty = np.linspace(0, yMax - 1, yMax) * self.ym_per_pix
-        lineLeft = left_fit_m[0] * ploty ** 2 + left_fit_m[1] * ploty + left_fit_m[2]
-        lineRight = right_fit_m[0] * ploty ** 2 + right_fit_m[1] * ploty + right_fit_m[2]
+        lineLeft, lineRight = self.get_left_right_lane(ploty)
 
         intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
-        for l_x, r_x, y in zip(lineLeft, lineRight, ploty):
-            # camera_coords = np.dot(np.linalg.inv(intrinsic_matrix), np.array([l_u, l_v, 1]).reshape(3, 1))
-            camera_coords = np.array([y, l_x, 1]).reshape(3, 1)
-            # Transform camera to body frame.
-            points = np.dot(np.linalg.inv(Quaternion(sensor_calibration['rotation']).rotation_matrix.T), camera_coords)
-            points = points + np.array(sensor_calibration['translation']).reshape((-1, 1))
-            vehicle_coords_x_left.append(list(points[0]))
-            vehicle_coords_y_left.append(list(points[1]))
-
-            camera_coords = np.array([y, r_x, 1]).reshape(3, 1)
-            # Transform camera to body frame.
-            points = np.dot(np.linalg.inv(Quaternion(sensor_calibration['rotation']).rotation_matrix.T), camera_coords)
-            points = points + np.array(sensor_calibration['translation']).reshape((-1, 1))
-            vehicle_coords_x_right.append(list(points[0]))
-            vehicle_coords_y_right.append(list(points[1]))
+        for lane in [lineLeft, lineRight]:
+            lane_on_vehicle_coords = []
+            for x, y in zip(lane, ploty):
+                # camera_coords = np.dot(np.linalg.inv(intrinsic_matrix), np.array([l_u, l_v, 1]).reshape(3, 1))
+                camera_coords = np.array([y, x, 1]).reshape(3, 1)
+                # Transform camera to body frame.
+                points = np.dot(np.linalg.inv(Quaternion(sensor_calibration['rotation']).rotation_matrix.T),
+                                camera_coords)
+                points = points + np.array(sensor_calibration['translation']).reshape((-1, 1))
+                lane_on_vehicle_coords.append(points)
+            lanes_on_vehicle_coords.append(lane_on_vehicle_coords)
+        utils.plot_lanes(lanes_on_vehicle_coords)
         print('ok')
-        # return points
+        return lanes_on_vehicle_coords
 
     def display_offset(self, img, input, fontScale=2):
         # unclear how it is defined
         yRange = 719
 
         # Calculate curvature
-        leftCurvature = self.calculateCurvature(yRange, left_fit_m)
-        rightCurvature = self.calculateCurvature(yRange, right_fit_m)
+        leftCurvature = self.calculateCurvature(yRange, self.left_fit_m)
+        rightCurvature = self.calculateCurvature(yRange, self.right_fit_m)
 
         # Calculate vehicle center
         xMax = img.shape[1] * self.xm_per_pix
         yMax = img.shape[0] * self.ym_per_pix
         vehicleCenter = xMax / 2
-        lineLeft = left_fit_m[0] * yMax ** 2 + left_fit_m[1] * yMax + left_fit_m[2]
-        lineRight = right_fit_m[0] * yMax ** 2 + right_fit_m[1] * yMax + right_fit_m[2]
+        lineLeft, lineRight = self.get_left_right_lane(yMax)
         lineMiddle = lineLeft + (lineRight - lineLeft) / 2
         diffFromVehicle = lineMiddle - vehicleCenter
         if diffFromVehicle > 0:
@@ -316,18 +316,10 @@ class NuSceneProcessing:
         return calibration_data
 
 
-if __name__ == '__main__':
-    camera_name = ["CAM_FRONT"]
-    scene_id = 3
-    root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
-    data = NuSceneProcessing(camera_name, scene_id, root_path)
-    lanedetection = LaneDetection()
-
-    sensor_filenames = data.GetFilenameList()
-    sensor_calibration_data = data.GetSensorCalibration()
-
-    for sample_filenames in sensor_filenames:
-        for sensor_filename, sensor_calibration in zip(sample_filenames, sensor_calibration_data):
+def main(sample_filenames, sensor_calibration_data):
+    '''The main process to handel the image data'''
+    for sample_filename in sample_filenames:
+        for sensor_filename, sensor_calibration in zip(sample_filename, sensor_calibration_data):
             image = cv2.imread(root_path + sensor_filename[0])
 
             intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
@@ -340,7 +332,7 @@ if __name__ == '__main__':
             resultCombined = lanedetection.combineGradients(SobelX, SobelY)
 
             img_unwarp = lanedetection.perspective_transform(resultCombined)
-            left_fit, right_fit, left_fit_m, right_fit_m, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
+            left_fit, right_fit, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
             new_img = lanedetection.drawLine(image, left_fit, right_fit)
             lanedetection.camera2body(image, sensor_calibration)
             input_img = lanedetection.display_offset(image, new_img)
@@ -350,3 +342,16 @@ if __name__ == '__main__':
             print('ok')
 
     cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    camera_name = ["CAM_FRONT"]
+    scene_id = 3
+    root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
+    data = NuSceneProcessing(camera_name, scene_id, root_path)
+    lanedetection = LaneDetection()
+
+    sample_filenames = data.GetFilenameList()
+    sensor_calibration_data = data.GetSensorCalibration()
+
+    main(sample_filenames, sensor_calibration_data)
