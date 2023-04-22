@@ -56,8 +56,8 @@ def plot_lanes(lanes_on_vehicle_coords):
         coord_x = []
         coord_y = []
         for coord in lane_on_vehicle_coords:
-            coord_x.append(coord[0][0])
-            coord_y.append(coord[1][0])
+            coord_x.append(coord[0])
+            coord_y.append(coord[1])
         ax.plot(coord_x, coord_y, color='b')
 
     plt.show()

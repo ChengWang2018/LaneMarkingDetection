@@ -229,26 +229,34 @@ class LaneDetection:
         lanes_on_vehicle_coords = []
 
         yMax = img.shape[0]
-        ploty = np.linspace(0, yMax - 1, yMax) * self.ym_per_pix
+        ploty = np.linspace(0, yMax - 1, yMax)
         lineLeft, lineRight = self.get_left_right_lane(ploty)
 
+        rvec = Quaternion(sensor_calibration['rotation']).rotation_matrix
+        tvec = np.array(sensor_calibration['translation']).reshape((-1, 1))
+        Trans = np.hstack((rvec, tvec))
         intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
+        temp = np.dot(intrinsic_matrix, Trans)
+        Pp = np.linalg.pinv(temp)
+
         for lane in [lineLeft, lineRight]:
             lane_on_vehicle_coords = []
             for x, y in zip(lane, ploty):
-                # camera_coords = np.dot(np.linalg.inv(intrinsic_matrix), np.array([l_u, l_v, 1]).reshape(3, 1))
-                camera_coords = np.array([y, x, 1]).reshape(3, 1)
-                # Transform camera to body frame.
-                points = np.dot(np.linalg.inv(Quaternion(sensor_calibration['rotation']).rotation_matrix.T),
-                                camera_coords)
-                points = points + np.array(sensor_calibration['translation']).reshape((-1, 1))
-                lane_on_vehicle_coords.append(points)
+                point = np.array([y, x, 1], np.float)
+                X = np.dot(Pp, point)
+                X1 = np.array(X[:3], np.float) / X[3]
+
+                lane_on_vehicle_coords.append(X1)
             lanes_on_vehicle_coords.append(lane_on_vehicle_coords)
-        utils.plot_lanes(lanes_on_vehicle_coords)
-        print('ok')
+
         return lanes_on_vehicle_coords
 
-    def display_offset(self, img, input, fontScale=2):
+    def body2map(self):
+        '''Tranform body frame to map frame'''
+        pass
+
+    def display_offset(self, lanes_on_vehicle_coords, new_img, fontScale=2):
+        '''display offset info on the image'''
         # unclear how it is defined
         yRange = 719
 
@@ -257,12 +265,9 @@ class LaneDetection:
         rightCurvature = self.calculateCurvature(yRange, self.right_fit_m)
 
         # Calculate vehicle center
-        xMax = img.shape[1] * self.xm_per_pix
-        yMax = img.shape[0] * self.ym_per_pix
-        vehicleCenter = xMax / 2
-        lineLeft, lineRight = self.get_left_right_lane(yMax)
-        lineMiddle = lineLeft + (lineRight - lineLeft) / 2
-        diffFromVehicle = lineMiddle - vehicleCenter
+        left_line_pos = lanes_on_vehicle_coords[0][-1][0]
+        right_line_pos = lanes_on_vehicle_coords[1][-1][0]
+        diffFromVehicle = (right_line_pos + left_line_pos) / 2
         if diffFromVehicle > 0:
             message = '{:.2f} m right'.format(diffFromVehicle)
         else:
@@ -271,11 +276,11 @@ class LaneDetection:
         # Draw info
         font = cv2.FONT_HERSHEY_SIMPLEX
         fontColor = (255, 255, 255)
-        cv2.putText(input, 'Left curvature: {:.0f} m'.format(leftCurvature), (50, 50), font, fontScale, fontColor, 2)
-        cv2.putText(input, 'Right curvature: {:.0f} m'.format(rightCurvature), (50, 120), font, fontScale, fontColor, 2)
-        cv2.putText(input, 'Vehicle is {} of center'.format(message), (50, 190), font, fontScale, fontColor, 2)
+        cv2.putText(new_img, 'Left curvature: {:.0f} m'.format(leftCurvature), (50, 50), font, fontScale, fontColor, 2)
+        cv2.putText(new_img, 'Right curvature: {:.0f} m'.format(rightCurvature), (50, 120), font, fontScale, fontColor, 2)
+        cv2.putText(new_img, 'Vehicle is {} of center'.format(message), (50, 190), font, fontScale, fontColor, 2)
 
-        return input
+        return new_img
 
 
 class NuSceneProcessing:
@@ -310,6 +315,10 @@ class NuSceneProcessing:
 
         return cam_front_data, camera_calibration
 
+    def get_ego_pose(self, cam_front_data):
+        ego_pos = self.nusc.get("ego_pose", cam_front_data["ego_pose_token"])
+        return ego_pos
+
     def get_lane_on_map(self, ego_pos):
         closest_lane_token = self.nusc_map.get_closest_lane(ego_pos['translation'][0], ego_pos['translation'][1], radius=2)
         closest_lane = None
@@ -330,12 +339,16 @@ class NuSceneProcessing:
             point_xy = np.array(point_xy)
         return point_xy
 
+
 def main(current_sample):
     '''The main process to handel the image data'''
     cam_front_data, camera_calibration = data.get_img_info(current_sample)
 
     cam_intrinsic = np.array(camera_calibration['camera_intrinsic'])
     image = cv2.imread(root_path + cam_front_data["filename"])
+
+    # ego_pose
+    ego_pose = data.get_ego_pose(cam_front_data)
 
     undistort_img = cv2.undistort(image, cam_intrinsic, None)
     hls_img = cv2.cvtColor(undistort_img, cv2.COLOR_BGR2HLS)
@@ -349,10 +362,12 @@ def main(current_sample):
     left_fit, right_fit, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
     new_img = lanedetection.drawLine(image, left_fit, right_fit)
 
-    # tranform lane lines to vehicle body frame
-    lanedetection.camera2body(image, camera_calibration)
-    input_img = lanedetection.display_offset(image, new_img)
+    # transform lane lines to vehicle body frame
+    lanes_on_vehicle_coords = lanedetection.camera2body(image, camera_calibration)
+    utils.plot_lanes(lanes_on_vehicle_coords)
+    input_img = lanedetection.display_offset(lanes_on_vehicle_coords, new_img)
     output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
+
     utils.showImages(output)
     plt.show()
     print('ok')
