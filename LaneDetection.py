@@ -284,7 +284,13 @@ class NuSceneProcessing:
         self.scene_id = scene_id
 
         self.nusc = NuScenes(version='v1.0-mini', dataroot=root_path, verbose=True)
-        self.nusc_map = NuScenesMap(dataroot=root_path, map_name='boston-seaport')
+        self.nusc_map = NuScenesMap(dataroot=root_path, map_name=self.get_map_name())
+
+    def get_map_name(self):
+        scene_record = self.nusc.scene[self.scene_id]
+        log_record = self.nusc.get('log', scene_record['log_token'])
+        log_location = log_record['location']
+        return log_location
 
     def get_samples(self):
         '''get samples in a given scene'''
@@ -296,34 +302,6 @@ class NuSceneProcessing:
             current_sample = self.nusc.get('sample', current_sample["next"])
         return samples
 
-    def GetFilenameList(self):
-        # Get the first sample in the selected scene
-        current_sample = self.nusc.get('sample', self.nusc.scene[scene_id]['first_sample_token'])
-
-        # Extract the filenames for the samples in the scene
-        filename_list = []
-        while not current_sample["next"] == "":
-            sample_file_list = []
-            for sensor in self.camera_name:
-                sensor_data = self.nusc.get('sample_data', current_sample['data'][sensor])
-                sample_file_list.append([sensor_data["filename"], current_sample["token"]])
-
-            filename_list.append(sample_file_list)
-
-            # Update the current sample with the next sample
-            current_sample = self.nusc.get('sample', current_sample["next"])
-        return filename_list
-
-    def GetSensorCalibration(self, current_sample):
-        '''Get the calibration data corresponding to the sample'''
-        # Get the calibration data for each of the sensors
-        calibration_data = []
-        for sensor in self.camera_name:
-            sensor_data = self.nusc.get('sample_data', current_sample['data'][sensor])
-            calibration_data.append(self.nusc.get("calibrated_sensor", sensor_data["calibrated_sensor_token"]))
-
-        return calibration_data
-
     def get_img_info(self, sample):
         # read the front camera info
         cam_token = sample['data'][self.camera_name[0]]
@@ -331,6 +309,26 @@ class NuSceneProcessing:
         camera_calibration = self.nusc.get('calibrated_sensor', cam_front_data['calibrated_sensor_token'])
 
         return cam_front_data, camera_calibration
+
+    def get_lane_on_map(self, ego_pos):
+        closest_lane_token = self.nusc_map.get_closest_lane(ego_pos['translation'][0], ego_pos['translation'][1], radius=2)
+        closest_lane = None
+        try:
+            closest_lane = self.nusc_map.get("lane", closest_lane_token)
+        except KeyError as e:
+            closest_lane_connector = self.nusc_map.get("lane_connector", closest_lane_token)
+
+        point_xy = []
+        # we skip lane connector
+        if closest_lane is not None:
+            poly = self.nusc_map.get("polygon", closest_lane['polygon_token'])
+
+            for point in poly['exterior_node_tokens']:
+                node = self.nusc_map.get('node', point)
+                point_xy.append([node['x'], node['y']])
+
+            point_xy = np.array(point_xy)
+        return point_xy
 
 def main(current_sample):
     '''The main process to handel the image data'''
