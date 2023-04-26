@@ -224,7 +224,7 @@ class LaneDetection:
 
         return lineLeft, lineRight
 
-    def camera2body(self, img, sensor_calibration):
+    def pixel2world(self, img, sensor_calibration, ego_pose):
         ''' Tranform pixel coordinates to the vehicle body frame '''
         lanes_on_vehicle_coords = []
 
@@ -232,21 +232,30 @@ class LaneDetection:
         ploty = np.linspace(0, yMax - 1, yMax)
         lineLeft, lineRight = self.get_left_right_lane(ploty)
 
-        rvec = Quaternion(sensor_calibration['rotation']).rotation_matrix
-        tvec = np.array(sensor_calibration['translation']).reshape((-1, 1))
-        Trans = np.hstack((rvec, tvec))
+        # get body to world
+        rvec_body2world = Quaternion(ego_pose['rotation']).rotation_matrix.T
+        tvec_body2world = np.array(ego_pose['translation']).reshape((-1, 1))
+
+        # get camera to body
+        rvec_camera2body = Quaternion(sensor_calibration['rotation']).rotation_matrix.T
+        tvec_camera2body = np.array(sensor_calibration['translation']).reshape((-1, 1))
+
+        # get pixel to camera
         intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
-        temp = np.dot(intrinsic_matrix, Trans)
-        Pp = np.linalg.pinv(temp)
 
         for lane in [lineLeft, lineRight]:
             lane_on_vehicle_coords = []
-            for x, y in zip(lane, ploty):
-                point = np.array([y, x, 1], np.float)
-                X = np.dot(Pp, point)
-                X1 = np.array(X[:3], np.float) / X[3]
+            for u, v in zip(lane, ploty):
+                point = np.array([u, v, 1], float).reshape(-1, 1)
+                point = np.dot(np.linalg.pinv(intrinsic_matrix), point)
 
-                lane_on_vehicle_coords.append(X1)
+                point = np.dot(np.linalg.pinv(rvec_camera2body), point)
+                point = point + tvec_camera2body
+
+                point = np.dot(np.linalg.pinv(rvec_body2world), point)
+                point = point + tvec_body2world
+
+                lane_on_vehicle_coords.append(point)
             lanes_on_vehicle_coords.append(lane_on_vehicle_coords)
 
         return lanes_on_vehicle_coords
@@ -363,7 +372,7 @@ def main(current_sample):
     new_img = lanedetection.drawLine(image, left_fit, right_fit)
 
     # transform lane lines to vehicle body frame
-    lanes_on_vehicle_coords = lanedetection.camera2body(image, camera_calibration)
+    lanes_on_vehicle_coords = lanedetection.pixel2world(image, camera_calibration, ego_pose)
     utils.plot_lanes(lanes_on_vehicle_coords)
     input_img = lanedetection.display_offset(lanes_on_vehicle_coords, new_img)
     output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
