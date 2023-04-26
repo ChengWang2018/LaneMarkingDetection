@@ -49,8 +49,8 @@ def showImages(img, cols=1, rows=1, figsize=(15, 10), cmap=None):
     ax.axis('off')
 
 
-def plot_lanes(lanes_on_vehicle_coords):
-    ''' Plot left and right lanes '''
+def plot_lane_on_map(lanes_on_vehicle_coords, gt):
+    ''' Plot left and right lanes on the ground truth (map)'''
     fig, ax = plt.subplots(1, 1)
     for lane_on_vehicle_coords in lanes_on_vehicle_coords:
         coord_x = []
@@ -59,5 +59,13 @@ def plot_lanes(lanes_on_vehicle_coords):
             coord_x.append(coord[0])
             coord_y.append(coord[1])
         ax.plot(coord_x, coord_y, color='b')
+
+    # plot the ground truth
+    gt_x = []
+    gt_y = []
+    for p in gt:
+        gt_x.append(p[0])
+        gt_y.append(p[1])
+    # ax.plot(gt_x, gt_y, color='r')
 
     plt.show()

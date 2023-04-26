@@ -14,6 +14,8 @@ class LaneDetection:
     def __init__(self):
         self.right_fit_m = None
         self.left_fit_m = None
+        self.right_fit = None
+        self.left_fit = None
         self.ym_per_pix = 0.2873
         self.xm_per_pix = 0.02555
 
@@ -112,7 +114,7 @@ class LaneDetection:
         return ((1 + (2 * left_fit_cr[0] * yRange * self.ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
             2 * left_fit_cr[0])
 
-    def drawLine(self, img, left_fit, right_fit):
+    def drawLine(self, img):
         """
         Draw the lane lines on the image `img` using the poly `left_fit` and `right_fit`.
         """
@@ -121,8 +123,8 @@ class LaneDetection:
         color_warp = np.zeros_like(img).astype(np.uint8)
 
         # Calculate points.
-        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
-        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+        left_fitx = self.left_fit[0] * ploty ** 2 + self.left_fit[1] * ploty + self.left_fit[2]
+        right_fitx = self.right_fit[0] * ploty ** 2 + self.right_fit[1] * ploty + self.right_fit[2]
 
         # Recast the x and y points into usable format for cv2.fillPoly()
         pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
@@ -208,33 +210,33 @@ class LaneDetection:
         righty = nonzeroy[right_lane_inds]
 
         # Fit a second order polynomial to each
-        left_fit = np.polyfit(lefty, leftx, 2)
-        right_fit = np.polyfit(righty, rightx, 2)
+        self.left_fit = np.polyfit(lefty, leftx, 2)
+        self.right_fit = np.polyfit(righty, rightx, 2)
 
         # Fit a second order polynomial to each
         self.left_fit_m = np.polyfit(lefty * self.ym_per_pix, leftx * self.xm_per_pix, 2)
         self.right_fit_m = np.polyfit(righty * self.ym_per_pix, rightx * self.xm_per_pix, 2)
 
-        return (
-            left_fit, right_fit, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
+        # return (
+        #     left_fit_m, right_fit_m, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
 
     def get_left_right_lane(self, ploty):
-        lineLeft = self.left_fit_m[0] * ploty ** 2 + self.left_fit_m[1] * ploty + self.left_fit_m[2]
-        lineRight = self.right_fit_m[0] * ploty ** 2 + self.right_fit_m[1] * ploty + self.right_fit_m[2]
+        lineLeft = self.left_fit[0] * ploty ** 2 + self.left_fit[1] * ploty + self.left_fit[2]
+        lineRight = self.right_fit[0] * ploty ** 2 + self.right_fit[1] * ploty + self.right_fit[2]
 
         return lineLeft, lineRight
 
-    def pixel2world(self, img, sensor_calibration, ego_pose):
+    def pixel2world(self, img, sensor_calibration, ego_pos):
         ''' Tranform pixel coordinates to the vehicle body frame '''
         lanes_on_vehicle_coords = []
 
-        yMax = img.shape[0]
+        yMax = int(self.height)
         ploty = np.linspace(0, yMax - 1, yMax)
         lineLeft, lineRight = self.get_left_right_lane(ploty)
 
         # get body to world
-        rvec_body2world = Quaternion(ego_pose['rotation']).rotation_matrix.T
-        tvec_body2world = np.array(ego_pose['translation']).reshape((-1, 1))
+        rvec_body2world = Quaternion(ego_pos['rotation']).rotation_matrix.T
+        tvec_body2world = np.array(ego_pos['translation']).reshape((-1, 1))
 
         # get camera to body
         rvec_camera2body = Quaternion(sensor_calibration['rotation']).rotation_matrix.T
@@ -246,14 +248,18 @@ class LaneDetection:
         for lane in [lineLeft, lineRight]:
             lane_on_vehicle_coords = []
             for u, v in zip(lane, ploty):
-                point = np.array([u, v, 1], float).reshape(-1, 1)
+                # get the point on original image
+                persepctive_points = np.array([u, v], dtype=float)
+                point = cv2.perspectiveTransform(persepctive_points.reshape(-1, 1, 2), self.Minv)
+
+                point = np.array([point[0][0][0], point[0][0][1], 1], float).reshape(-1, 1)
                 point = np.dot(np.linalg.pinv(intrinsic_matrix), point)
 
                 point = np.dot(np.linalg.pinv(rvec_camera2body), point)
                 point = point + tvec_camera2body
 
-                point = np.dot(np.linalg.pinv(rvec_body2world), point)
-                point = point + tvec_body2world
+                # point = np.dot(np.linalg.pinv(rvec_body2world), point)
+                # point = point + tvec_body2world
 
                 lane_on_vehicle_coords.append(point)
             lanes_on_vehicle_coords.append(lane_on_vehicle_coords)
@@ -274,8 +280,8 @@ class LaneDetection:
         rightCurvature = self.calculateCurvature(yRange, self.right_fit_m)
 
         # Calculate vehicle center
-        left_line_pos = lanes_on_vehicle_coords[0][-1][0]
-        right_line_pos = lanes_on_vehicle_coords[1][-1][0]
+        left_line_pos = lanes_on_vehicle_coords[0][-1][0][0]
+        right_line_pos = lanes_on_vehicle_coords[1][-1][0][0]
         diffFromVehicle = (right_line_pos + left_line_pos) / 2
         if diffFromVehicle > 0:
             message = '{:.2f} m right'.format(diffFromVehicle)
@@ -324,7 +330,7 @@ class NuSceneProcessing:
 
         return cam_front_data, camera_calibration
 
-    def get_ego_pose(self, cam_front_data):
+    def get_ego_pos(self, cam_front_data):
         ego_pos = self.nusc.get("ego_pose", cam_front_data["ego_pose_token"])
         return ego_pos
 
@@ -356,8 +362,8 @@ def main(current_sample):
     cam_intrinsic = np.array(camera_calibration['camera_intrinsic'])
     image = cv2.imread(root_path + cam_front_data["filename"])
 
-    # ego_pose
-    ego_pose = data.get_ego_pose(cam_front_data)
+    # ego_pos
+    ego_pos = data.get_ego_pos(cam_front_data)
 
     undistort_img = cv2.undistort(image, cam_intrinsic, None)
     hls_img = cv2.cvtColor(undistort_img, cv2.COLOR_BGR2HLS)
@@ -368,12 +374,13 @@ def main(current_sample):
     resultCombined = lanedetection.combineGradients(SobelX, SobelY)
 
     img_unwarp = lanedetection.perspective_transform(resultCombined)
-    left_fit, right_fit, _, _, _, _, _ = lanedetection.findLines(img_unwarp)
-    new_img = lanedetection.drawLine(image, left_fit, right_fit)
+    lanedetection.findLines(img_unwarp)
+    new_img = lanedetection.drawLine(image)
 
     # transform lane lines to vehicle body frame
-    lanes_on_vehicle_coords = lanedetection.pixel2world(image, camera_calibration, ego_pose)
-    utils.plot_lanes(lanes_on_vehicle_coords)
+    lanes_on_vehicle_coords = lanedetection.pixel2world(image, camera_calibration, ego_pos)
+    gt = data.get_lane_on_map(ego_pos)
+    utils.plot_lane_on_map(lanes_on_vehicle_coords, gt)
     input_img = lanedetection.display_offset(lanes_on_vehicle_coords, new_img)
     output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
 
