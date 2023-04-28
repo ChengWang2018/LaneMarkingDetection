@@ -251,12 +251,17 @@ class LaneDetection:
                 # get the point on original image
                 persepctive_points = np.array([u, v], dtype=float)
                 point = cv2.perspectiveTransform(persepctive_points.reshape(-1, 1, 2), self.Minv)
+                # point = [point[0][0][0], point[0][0][1]]
 
                 point = np.array([point[0][0][0], point[0][0][1], 1], float).reshape(-1, 1)
                 point = np.dot(np.linalg.pinv(intrinsic_matrix), point)
 
-                point = np.dot(np.linalg.pinv(rvec_camera2body), point)
-                point = point + tvec_camera2body
+                points = np.dot(np.linalg.pinv(rvec_camera2body), point)
+                transPlaneToCam = np.dot(np.linalg.pinv(rvec_camera2body), tvec_camera2body)
+                scale = transPlaneToCam[2] / points[2]
+
+                scale_points = np.multiply(scale, points)
+                point = scale_points - transPlaneToCam
 
                 # point = np.dot(np.linalg.pinv(rvec_body2world), point)
                 # point = point + tvec_body2world
@@ -265,10 +270,6 @@ class LaneDetection:
             lanes_on_vehicle_coords.append(lane_on_vehicle_coords)
 
         return lanes_on_vehicle_coords
-
-    def body2map(self):
-        '''Tranform body frame to map frame'''
-        pass
 
     def display_offset(self, lanes_on_vehicle_coords, new_img, fontScale=2):
         '''display offset info on the image'''
