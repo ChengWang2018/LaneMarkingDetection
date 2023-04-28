@@ -10,7 +10,6 @@ from pyquaternion import Quaternion
 import utils
 import matplotlib
 from nuscenes.utils.geometry_utils import view_points
-from clip_points_behind_camera import clip_points_behind_camera
 
 matplotlib.use('TkAgg')
 
@@ -21,8 +20,8 @@ class LaneDetection:
         self.left_fit_m = None
         self.right_fit = None
         self.left_fit = None
-        self.ym_per_pix = 0.2873
-        self.xm_per_pix = 0.02555
+        self.ym_per_pix = 1.86
+        self.xm_per_pix = 0.00007
 
         # Point order: Top-Left, Top-Right, Bottom-Left, Bottom-Right
         self.source_points = np.array([[680, 565], [970, 565], [1350, 900], [190, 900]], dtype="float32")
@@ -253,32 +252,31 @@ class LaneDetection:
         return lanes_on_pixels
 
     @staticmethod
-    def world2pixel(points, sensor_calibration, ego_pos):
+    def world2pixel(lanes, sensor_calibration, ego_pos):
         '''transform the lane lines on a map to the pixel coordinate'''
-        # near_plane = 1
-        # point = points.T
-
         final_points = []
-        for point in points:
-            point = np.array(point).reshape(-1, 1)
-            point = np.vstack((point, np.zeros((1, point.shape[1]))))
-            # Transform into the ego vehicle frame for the timestamp of the image.
-            point = point - np.array(ego_pos['translation']).reshape((-1, 1))
-            point = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, point)
-            # Transform into the camera.
-            point = point - np.array(sensor_calibration['translation']).reshape((-1, 1))
-            point = np.dot(Quaternion(sensor_calibration['rotation']).rotation_matrix.T, point)
+        for lane in lanes:
+            points = lane.T
+            for point in points:
+                point = np.array(point).reshape(-1, 1)
+                point = np.vstack((point, np.zeros((1, point.shape[1]))))
+                # Transform into the ego vehicle frame for the timestamp of the image.
+                point = point - np.array(ego_pos['translation']).reshape((-1, 1))
+                point = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, point)
+                # Transform into the camera.
+                point = point - np.array(sensor_calibration['translation']).reshape((-1, 1))
+                point = np.dot(Quaternion(sensor_calibration['rotation']).rotation_matrix.T, point)
 
-            # Perform clipping on polygons that are partially behind the camera.
-            # if point[2] < 0:
-            #     continue
-            # point = clip_points_behind_camera(point, near_plane)
+                # Perform clipping on polygons that are partially behind the camera accoridng to Z value.
+                if point[2] < 0:
+                    continue
 
-            cam_intrinsic = np.array(sensor_calibration["camera_intrinsic"])
-            # Take the actual picture (matrix multiplication with camera-matrix + renormalization).
-            final_point = view_points(point, cam_intrinsic, normalize=True)
+                cam_intrinsic = np.array(sensor_calibration["camera_intrinsic"])
+                # Take the actual picture (matrix multiplication with camera-matrix + renormalization).
+                final_point = view_points(point, cam_intrinsic, normalize=True)
 
-            final_points.append(final_point)
+                final_points.append(final_point)
+
         return final_points
 
     def display_offset(self, new_img, fontScale=2):
@@ -287,8 +285,8 @@ class LaneDetection:
         yRange = 719
 
         # Calculate curvature
-        leftCurvature = self.calculateCurvature(yRange, self.left_fit_m)
-        rightCurvature = self.calculateCurvature(yRange, self.right_fit_m)
+        leftCurvature = 1 / self.calculateCurvature(yRange, self.left_fit_m)
+        rightCurvature = 1 / self.calculateCurvature(yRange, self.right_fit_m)
 
         # Calculate vehicle center
         xMax = new_img.shape[1] * self.xm_per_pix
@@ -306,8 +304,8 @@ class LaneDetection:
         # Draw info
         font = cv2.FONT_HERSHEY_SIMPLEX
         fontColor = (255, 255, 255)
-        cv2.putText(new_img, 'Left curvature: {:.0f} m'.format(leftCurvature), (50, 50), font, fontScale, fontColor, 2)
-        cv2.putText(new_img, 'Right curvature: {:.0f} m'.format(rightCurvature), (50, 120), font, fontScale, fontColor, 2)
+        cv2.putText(new_img, 'Left curvature: {:.0f} 1/m'.format(leftCurvature), (50, 50), font, fontScale, fontColor, 2)
+        cv2.putText(new_img, 'Right curvature: {:.0f} 1/m'.format(rightCurvature), (50, 120), font, fontScale, fontColor, 2)
         cv2.putText(new_img, 'Vehicle is {} of center'.format(message), (50, 190), font, fontScale, fontColor, 2)
 
         return new_img
@@ -369,7 +367,8 @@ class NuSceneProcessing:
             point_xy = np.array(point_xy)
         return point_xy
 
-    def resample_lane(self, gts):
+    @staticmethod
+    def resample_lane(gts):
         '''resample the lane points at every 1 m'''
         # if lateral distance larger than this threshold, it should belong to another lane
         lane_thres = 3
@@ -400,7 +399,7 @@ class NuSceneProcessing:
                 dy = next_point[1] - current_point[1]
                 alpha = dy / dx
                 dis = np.sqrt(dx**2+dy**2)
-                dis = int(dis)
+                dis = int(dis/sample_dis)
                 solved = utils.solve_equation(alpha, current_point, next_point, dis)
                 point_x.extend(np.linspace(current_point[0], solved[0], dis+1))
                 point_y.extend(np.linspace(current_point[1], solved[1], dis+1))
@@ -408,6 +407,7 @@ class NuSceneProcessing:
 
             new_lanes.append(np.array([point_x, point_y]))
         return new_lanes
+
 
 def main(current_sample):
     '''The main process to handel the image data'''
@@ -420,26 +420,28 @@ def main(current_sample):
     ego_pos = data.get_ego_pos(cam_front_data)
 
     undistort_img = cv2.undistort(image, cam_intrinsic, None)
-    hls_img = cv2.cvtColor(undistort_img, cv2.COLOR_BGR2HLS)
-    useSChannel = hls_img[:, :, 2]
+    hls_img = cv2.cvtColor(undistort_img, cv2.COLOR_RGB2GRAY)
+    useSChannel = hls_img
     SobelX = lanedetection.absSobelThresh(useSChannel, thresh_min=10, thresh_max=160)
     SobelY = lanedetection.absSobelThresh(useSChannel, orient='y', thresh_min=10, thresh_max=160)
-
     resultCombined = lanedetection.combineGradients(SobelX, SobelY)
 
+    # find the lane lines
     img_unwarp = lanedetection.perspective_transform(resultCombined)
     lanedetection.findLines(img_unwarp)
     new_img = lanedetection.drawLine(image)
 
     # transform perspective lane lines to pixel frame
     lanes_on_pixels = lanedetection.persepctive2pixel()
+
+    # read the lane lines on the map
     gt = data.get_lane_on_map(ego_pos)
     resampled_gt = data.resample_lane(gt)
-
-    gt_piexl = lanedetection.world2pixel(resampled_gt[0].T, camera_calibration, ego_pos)
+    gt_piexl = lanedetection.world2pixel(resampled_gt, camera_calibration, ego_pos)
     # comparing results with ground truth
-    utils.plot_lane_on_map(lanes_on_pixels, gt_piexl)
+    utils.plot_lane_on_map(image, lanes_on_pixels, gt_piexl)
 
+    # display offset on the image
     input_img = lanedetection.display_offset(new_img)
     output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
 
@@ -462,7 +464,7 @@ if __name__ == '__main__':
 
     samples = data.get_samples()
     if single_img:
-        current_samples = samples[0]
+        current_samples = samples[14]
         main(current_samples)
     else:
         current_samples = samples

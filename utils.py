@@ -50,8 +50,8 @@ def showImages(img, cols=1, rows=1, figsize=(15, 10), cmap=None):
     ax.axis('off')
 
 
-def plot_lane_on_map(lanes_on_vehicle_coords, gt):
-    ''' Plot left and right lanes on the ground truth (map)'''
+def plot_lane_on_map(image, lanes_on_vehicle_coords, gt):
+    ''' Plot detected left and right lanes on the ground truth (map) and also plot the lane lines of the map'''
     fig, ax = plt.subplots(1, 1)
     for lane_on_vehicle_coords in lanes_on_vehicle_coords:
         coord_x = []
@@ -68,11 +68,14 @@ def plot_lane_on_map(lanes_on_vehicle_coords, gt):
         gt_x.append(p[0])
         gt_y.append(p[1])
     ax.scatter(gt_x, gt_y, color='r')
+    plt.xlim([0, image.shape[1]])
+    plt.ylim([0, image.shape[0]])
     plt.gca().invert_yaxis()
     plt.show()
 
+
 def plot_gt(gt, resampled_gt):
-    '''plot the ground truth lane points'''
+    '''plot the ground truth lane points and also the resampled ground truth'''
     fig, ax = plt.subplots(1, 1)
     # plot the ground truth
     gt_x = []
@@ -83,8 +86,6 @@ def plot_gt(gt, resampled_gt):
     ax.scatter(gt_x, gt_y, color='b')
 
     # plot the resampled ground truth
-    r_gt_x = []
-    r_gt_y = []
     for p in resampled_gt:
         ax.scatter(p[0], p[1], color='r')
 
