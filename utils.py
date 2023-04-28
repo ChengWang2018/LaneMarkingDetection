@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from sympy import *
 
 
 def visualizeLanes(image, ax):
@@ -66,6 +67,51 @@ def plot_lane_on_map(lanes_on_vehicle_coords, gt):
     for p in gt:
         gt_x.append(p[0])
         gt_y.append(p[1])
-    # ax.plot(gt_x, gt_y, color='r')
+    ax.scatter(gt_x, gt_y, color='r')
+    plt.gca().invert_yaxis()
+    plt.show()
+
+def plot_gt(gt, resampled_gt):
+    '''plot the ground truth lane points'''
+    fig, ax = plt.subplots(1, 1)
+    # plot the ground truth
+    gt_x = []
+    gt_y = []
+    for p in gt:
+        gt_x.append(p[0])
+        gt_y.append(p[1])
+    ax.scatter(gt_x, gt_y, color='b')
+
+    # plot the resampled ground truth
+    r_gt_x = []
+    r_gt_y = []
+    for p in resampled_gt:
+        ax.scatter(p[0], p[1], color='r')
 
     plt.show()
+
+
+def get_euclidean_distance(point1, point2):
+    dist_square = (point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2
+    return np.sqrt(float(dist_square))
+
+
+def solve_equation(alpha, curr_point, next_point, dis):
+    ''' get a point with defined distance to the beginning point'''
+
+    x = Symbol('x')
+    y = Symbol('y')
+    solved_values = solve(
+        [(curr_point[1] - y) - alpha * (curr_point[0] - x),
+         (curr_point[1] - y) ** 2 + (curr_point[0] - x) ** 2 - dis ** 2], [x, y])
+
+    # get the value that is closer to the next point
+    dis = 9999
+    solved = [None, None]
+    for value in solved_values:
+        dis_ = get_euclidean_distance(value, next_point)
+        if dis_ < dis:
+            dis = dis_
+            solved[0] = float(value[0])
+            solved[1] = float(value[1])
+    return solved

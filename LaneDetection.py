@@ -1,3 +1,6 @@
+import copy
+import copyreg
+
 from nuscenes.nuscenes import NuScenes
 from nuscenes.map_expansion.map_api import NuScenesMap
 import matplotlib.pyplot as plt
@@ -6,6 +9,8 @@ import cv2
 from pyquaternion import Quaternion
 import utils
 import matplotlib
+from nuscenes.utils.geometry_utils import view_points
+from clip_points_behind_camera import clip_points_behind_camera
 
 matplotlib.use('TkAgg')
 
@@ -226,52 +231,57 @@ class LaneDetection:
 
         return lineLeft, lineRight
 
-    def pixel2world(self, img, sensor_calibration, ego_pos):
-        ''' Tranform pixel coordinates to the vehicle body frame '''
-        lanes_on_vehicle_coords = []
+    def persepctive2pixel(self):
+        ''' Tranform perspective to pixel coordinate '''
+        lanes_on_pixels = []
 
         yMax = int(self.height)
         ploty = np.linspace(0, yMax - 1, yMax)
         lineLeft, lineRight = self.get_left_right_lane(ploty)
 
-        # get body to world
-        rvec_body2world = Quaternion(ego_pos['rotation']).rotation_matrix.T
-        tvec_body2world = np.array(ego_pos['translation']).reshape((-1, 1))
-
-        # get camera to body
-        rvec_camera2body = Quaternion(sensor_calibration['rotation']).rotation_matrix.T
-        tvec_camera2body = np.array(sensor_calibration['translation']).reshape((-1, 1))
-
-        # get pixel to camera
-        intrinsic_matrix = np.array(sensor_calibration["camera_intrinsic"])
-
         for lane in [lineLeft, lineRight]:
-            lane_on_vehicle_coords = []
+            lane_on_pixel = []
             for u, v in zip(lane, ploty):
                 # get the point on original image
                 persepctive_points = np.array([u, v], dtype=float)
                 point = cv2.perspectiveTransform(persepctive_points.reshape(-1, 1, 2), self.Minv)
-                # point = [point[0][0][0], point[0][0][1]]
+                point = [point[0][0][0], point[0][0][1]]
 
-                point = np.array([point[0][0][0], point[0][0][1], 1], float).reshape(-1, 1)
-                point = np.dot(np.linalg.pinv(intrinsic_matrix), point)
+                lane_on_pixel.append(point)
+            lanes_on_pixels.append(lane_on_pixel)
 
-                points = np.dot(np.linalg.pinv(rvec_camera2body), point)
-                transPlaneToCam = np.dot(np.linalg.pinv(rvec_camera2body), tvec_camera2body)
-                scale = transPlaneToCam[2] / points[2]
+        return lanes_on_pixels
 
-                scale_points = np.multiply(scale, points)
-                point = scale_points - transPlaneToCam
+    @staticmethod
+    def world2pixel(points, sensor_calibration, ego_pos):
+        '''transform the lane lines on a map to the pixel coordinate'''
+        # near_plane = 1
+        # point = points.T
 
-                # point = np.dot(np.linalg.pinv(rvec_body2world), point)
-                # point = point + tvec_body2world
+        final_points = []
+        for point in points:
+            point = np.array(point).reshape(-1, 1)
+            point = np.vstack((point, np.zeros((1, point.shape[1]))))
+            # Transform into the ego vehicle frame for the timestamp of the image.
+            point = point - np.array(ego_pos['translation']).reshape((-1, 1))
+            point = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, point)
+            # Transform into the camera.
+            point = point - np.array(sensor_calibration['translation']).reshape((-1, 1))
+            point = np.dot(Quaternion(sensor_calibration['rotation']).rotation_matrix.T, point)
 
-                lane_on_vehicle_coords.append(point)
-            lanes_on_vehicle_coords.append(lane_on_vehicle_coords)
+            # Perform clipping on polygons that are partially behind the camera.
+            # if point[2] < 0:
+            #     continue
+            # point = clip_points_behind_camera(point, near_plane)
 
-        return lanes_on_vehicle_coords
+            cam_intrinsic = np.array(sensor_calibration["camera_intrinsic"])
+            # Take the actual picture (matrix multiplication with camera-matrix + renormalization).
+            final_point = view_points(point, cam_intrinsic, normalize=True)
 
-    def display_offset(self, lanes_on_vehicle_coords, new_img, fontScale=2):
+            final_points.append(final_point)
+        return final_points
+
+    def display_offset(self, new_img, fontScale=2):
         '''display offset info on the image'''
         # unclear how it is defined
         yRange = 719
@@ -281,9 +291,13 @@ class LaneDetection:
         rightCurvature = self.calculateCurvature(yRange, self.right_fit_m)
 
         # Calculate vehicle center
-        left_line_pos = lanes_on_vehicle_coords[0][-1][0][0]
-        right_line_pos = lanes_on_vehicle_coords[1][-1][0][0]
-        diffFromVehicle = (right_line_pos + left_line_pos) / 2
+        xMax = new_img.shape[1] * self.xm_per_pix
+        yMax = new_img.shape[0] * self.ym_per_pix
+        vehicleCenter = xMax / 2
+        lineLeft = self.left_fit_m[0] * yMax ** 2 + self.left_fit_m[1] * yMax + self.left_fit_m[2]
+        lineRight = self.right_fit_m[0] * yMax ** 2 + self.right_fit_m[1] * yMax + self.right_fit_m[2]
+        lineMiddle = lineLeft + (lineRight - lineLeft) / 2
+        diffFromVehicle = lineMiddle - vehicleCenter
         if diffFromVehicle > 0:
             message = '{:.2f} m right'.format(diffFromVehicle)
         else:
@@ -355,6 +369,45 @@ class NuSceneProcessing:
             point_xy = np.array(point_xy)
         return point_xy
 
+    def resample_lane(self, gts):
+        '''resample the lane points at every 1 m'''
+        # if lateral distance larger than this threshold, it should belong to another lane
+        lane_thres = 3
+        # resampled distance is 1 meter
+        sample_dis = 1
+
+        # assign points to left and right lanes
+        lanes = []
+        points = []
+        for inx in range(len(gts)-1):
+            if np.abs(gts[inx+1][1] - gts[inx][1]) < lane_thres:
+                points.append(gts[inx])
+            else:
+                points.append(gts[inx])
+                lanes.append(points)
+                points = []
+        points.append(gts[-1])
+        lanes.append(points)
+
+        # resample each lane
+        new_lanes = []
+        for lane in lanes:
+            point_x = []
+            point_y = []
+            current_point = lane[0]
+            for next_point in lane[1:]:
+                dx = next_point[0] - current_point[0]
+                dy = next_point[1] - current_point[1]
+                alpha = dy / dx
+                dis = np.sqrt(dx**2+dy**2)
+                dis = int(dis)
+                solved = utils.solve_equation(alpha, current_point, next_point, dis)
+                point_x.extend(np.linspace(current_point[0], solved[0], dis+1))
+                point_y.extend(np.linspace(current_point[1], solved[1], dis+1))
+                current_point = solved
+
+            new_lanes.append(np.array([point_x, point_y]))
+        return new_lanes
 
 def main(current_sample):
     '''The main process to handel the image data'''
@@ -378,11 +431,16 @@ def main(current_sample):
     lanedetection.findLines(img_unwarp)
     new_img = lanedetection.drawLine(image)
 
-    # transform lane lines to vehicle body frame
-    lanes_on_vehicle_coords = lanedetection.pixel2world(image, camera_calibration, ego_pos)
+    # transform perspective lane lines to pixel frame
+    lanes_on_pixels = lanedetection.persepctive2pixel()
     gt = data.get_lane_on_map(ego_pos)
-    utils.plot_lane_on_map(lanes_on_vehicle_coords, gt)
-    input_img = lanedetection.display_offset(lanes_on_vehicle_coords, new_img)
+    resampled_gt = data.resample_lane(gt)
+
+    gt_piexl = lanedetection.world2pixel(resampled_gt[0].T, camera_calibration, ego_pos)
+    # comparing results with ground truth
+    utils.plot_lane_on_map(lanes_on_pixels, gt_piexl)
+
+    input_img = lanedetection.display_offset(new_img)
     output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
 
     utils.showImages(output)
