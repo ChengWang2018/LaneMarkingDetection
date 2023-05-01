@@ -20,11 +20,11 @@ class LaneDetection:
         self.left_fit_m = None
         self.right_fit = None
         self.left_fit = None
-        self.ym_per_pix = 1.86
-        self.xm_per_pix = 0.00007
+        self.ym_per_pix = 0.0377
+        self.xm_per_pix = 0.00335
 
         # Point order: Top-Left, Top-Right, Bottom-Left, Bottom-Right
-        self.source_points = np.array([[680, 565], [970, 565], [1350, 900], [190, 900]], dtype="float32")
+        self.source_points = np.array([[670, 555], [900, 555], [1350, 900], [240, 900]], dtype="float32")
         self.bottom_width = self.source_points[2, 0] - self.source_points[3, 0]
         self.height = self.source_points[2, 1] - self.source_points[0, 1]
 
@@ -224,9 +224,10 @@ class LaneDetection:
         # return (
         #     left_fit_m, right_fit_m, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
 
-    def get_left_right_lane(self, ploty):
-        lineLeft = self.left_fit[0] * ploty ** 2 + self.left_fit[1] * ploty + self.left_fit[2]
-        lineRight = self.right_fit[0] * ploty ** 2 + self.right_fit[1] * ploty + self.right_fit[2]
+    @staticmethod
+    def get_left_right_lane(left_fit, right_fit, ploty):
+        lineLeft = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        lineRight = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
 
         return lineLeft, lineRight
 
@@ -236,7 +237,7 @@ class LaneDetection:
 
         yMax = int(self.height)
         ploty = np.linspace(0, yMax - 1, yMax)
-        lineLeft, lineRight = self.get_left_right_lane(ploty)
+        lineLeft, lineRight = self.get_left_right_lane(self.left_fit, self.right_fit, ploty)
 
         for lane in [lineLeft, lineRight]:
             lane_on_pixel = []
@@ -252,32 +253,97 @@ class LaneDetection:
         return lanes_on_pixels
 
     @staticmethod
-    def world2pixel(lanes, sensor_calibration, ego_pos):
+    def world2pixel(point, camera_calibration, ego_pos, remove_behind=True):
+        point = np.array(point).reshape(-1, 1)
+        point = np.vstack((point, np.zeros((1, point.shape[1]))))
+        # Transform into the ego vehicle frame for the timestamp of the image.
+        point = point - np.array(ego_pos['translation']).reshape((-1, 1))
+        point = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, point)
+        # Transform into the camera.
+        point = point - np.array(camera_calibration['translation']).reshape((-1, 1))
+        point = np.dot(Quaternion(camera_calibration['rotation']).rotation_matrix.T, point)
+
+        # Perform clipping on polygons that are partially behind the camera according to Z value.
+        if remove_behind and point[2] < 0:
+            return None
+
+        cam_intrinsic = np.array(camera_calibration["camera_intrinsic"])
+        # Take the actual picture (matrix multiplication with camera-matrix + renormalization).
+        final_point = view_points(point, cam_intrinsic, normalize=True)
+
+        return final_point
+
+    def lanes2pixel(self, lanes, camera_calibration, ego_pos):
         '''transform the lane lines on a map to the pixel coordinate'''
         final_points = []
         for lane in lanes:
             points = lane.T
             for point in points:
-                point = np.array(point).reshape(-1, 1)
-                point = np.vstack((point, np.zeros((1, point.shape[1]))))
-                # Transform into the ego vehicle frame for the timestamp of the image.
-                point = point - np.array(ego_pos['translation']).reshape((-1, 1))
-                point = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, point)
-                # Transform into the camera.
-                point = point - np.array(sensor_calibration['translation']).reshape((-1, 1))
-                point = np.dot(Quaternion(sensor_calibration['rotation']).rotation_matrix.T, point)
-
-                # Perform clipping on polygons that are partially behind the camera accoridng to Z value.
-                if point[2] < 0:
+                final_point = self.world2pixel(point, camera_calibration, ego_pos)
+                if final_point is None:
                     continue
-
-                cam_intrinsic = np.array(sensor_calibration["camera_intrinsic"])
-                # Take the actual picture (matrix multiplication with camera-matrix + renormalization).
-                final_point = view_points(point, cam_intrinsic, normalize=True)
-
                 final_points.append(final_point)
 
         return final_points
+
+    # this function is not usable because depth info is missing
+    def perspective2body(self, camera_calibration):
+        ''' Tranform perspective to body coordinate '''
+        lanes_on_body = []
+
+        yMax = int(self.height)
+        ploty = np.linspace(0, yMax - 1, yMax)
+        lineLeft, lineRight = self.get_left_right_lane(self.left_fit, self.right_fit, ploty)
+
+        # get camera to body
+        rvec_camera2body = Quaternion(camera_calibration['rotation']).rotation_matrix.T
+        tvec_camera2body = np.array(camera_calibration['translation']).reshape((-1, 1))
+
+        # get pixel to camera
+        intrinsic_matrix = np.array(camera_calibration["camera_intrinsic"])
+        for lane in [lineLeft, lineRight]:
+            lane_on_body = []
+            for u, v in zip(lane, ploty):
+                # get the point on original image
+                persepctive_points = np.array([u, v], dtype=float)
+                point = cv2.perspectiveTransform(persepctive_points.reshape(-1, 1, 2), self.Minv)
+
+                point = np.array([point[0][0][0], point[0][0][1], 1], float).reshape(-1, 1)
+                point = np.dot(np.linalg.pinv(intrinsic_matrix), point)
+                points = np.dot(np.linalg.pinv(rvec_camera2body), point)
+                transPlaneToCam = np.dot(np.linalg.pinv(rvec_camera2body), tvec_camera2body)
+                scale = transPlaneToCam[2] / points[2]
+
+                scale_points = np.multiply(scale, points)
+                point = scale_points - transPlaneToCam
+                lane_on_body.append(point)
+            lanes_on_body.append(lane_on_body)
+
+        return lanes_on_body
+
+    def comparison_on_perseptive(self, gt_pixel, ego_pos, camera_calibration):
+        # get perspective results of detected lane marking
+        yMax = int(self.height)
+        ploty = np.linspace(0, yMax - 1, yMax) * self.ym_per_pix
+        lineLeft, lineRight = self.get_left_right_lane(self.left_fit_m, self.right_fit_m, ploty)
+
+        # get ego pos on perspective view
+        point = np.array(ego_pos['translation'], dtype=float)[:2]
+        ego_pos_pixel = self.world2pixel(point, camera_calibration, ego_pos, remove_behind=False)
+        point = np.array([ego_pos_pixel[0], ego_pos_pixel[1]], dtype=float)
+        point = cv2.perspectiveTransform(point.reshape(-1, 1, 2), self.M)
+        ego_pos_perspective = [point[0][0][0] * self.xm_per_pix, point[0][0][1] * self.ym_per_pix]
+
+        # transform image points to perspective points
+        gt_persepctive = []
+        for point in gt_pixel:
+            point = np.array([point[0], point[1]], dtype=float)
+            perspective_point = cv2.perspectiveTransform(point.reshape(-1, 1, 2), self.M)
+
+            gt_persepctive.append([perspective_point[0][0][0] * self.xm_per_pix, perspective_point[0][0][1] * self.ym_per_pix])
+
+        # plot results
+        utils.plot_on_perspective([ploty, lineLeft, lineRight], ego_pos_perspective, gt_persepctive)
 
     def display_offset(self, new_img, fontScale=2):
         '''display offset info on the image'''
@@ -292,14 +358,14 @@ class LaneDetection:
         xMax = new_img.shape[1] * self.xm_per_pix
         yMax = new_img.shape[0] * self.ym_per_pix
         vehicleCenter = xMax / 2
-        lineLeft = self.left_fit_m[0] * yMax ** 2 + self.left_fit_m[1] * yMax + self.left_fit_m[2]
-        lineRight = self.right_fit_m[0] * yMax ** 2 + self.right_fit_m[1] * yMax + self.right_fit_m[2]
+        lineLeft, lineRight = self.get_left_right_lane(self.left_fit_m, self.right_fit_m, yMax)
+        lane_width = lineRight - lineLeft
         lineMiddle = lineLeft + (lineRight - lineLeft) / 2
         diffFromVehicle = lineMiddle - vehicleCenter
-        if diffFromVehicle > 0:
-            message = '{:.2f} m right'.format(diffFromVehicle)
+        if lane_width > 0:
+            message = '{:.2f} m right'.format(lane_width)
         else:
-            message = '{:.2f} m left'.format(-diffFromVehicle)
+            message = '{:.2f} m left'.format(-lane_width)
 
         # Draw info
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -316,7 +382,7 @@ class NuSceneProcessing:
         self.camera_name = camera_name
         self.scene_id = scene_id
 
-        self.nusc = NuScenes(version='v1.0-mini', dataroot=root_path, verbose=True)
+        self.nusc = NuScenes(version='v1.0-trainval', dataroot=root_path, verbose=True)
         self.nusc_map = NuScenesMap(dataroot=root_path, map_name=self.get_map_name())
 
     def get_map_name(self):
@@ -349,14 +415,14 @@ class NuSceneProcessing:
 
     def get_lane_on_map(self, ego_pos):
         closest_lane_token = self.nusc_map.get_closest_lane(ego_pos['translation'][0], ego_pos['translation'][1], radius=2)
-        closest_lane = None
         try:
             closest_lane = self.nusc_map.get("lane", closest_lane_token)
         except KeyError as e:
             closest_lane_connector = self.nusc_map.get("lane_connector", closest_lane_token)
+            raise 'closest lane is a connector'
 
         point_xy = []
-        # we skip lane connector
+        # we skip lane connector, because lane connector has irregular polygon points
         if closest_lane is not None:
             poly = self.nusc_map.get("polygon", closest_lane['polygon_token'])
 
@@ -431,30 +497,35 @@ def main(current_sample):
     lanedetection.findLines(img_unwarp)
     new_img = lanedetection.drawLine(image)
 
+    # transform perspective lane lines to body frame, this should be supplemented by depth info
+    # lanes_on_body = lanedetection.perspective2body(camera_calibration)
+    # utils.plot_lane_on_map(image, lanes_on_body, [])
+
     # transform perspective lane lines to pixel frame
     lanes_on_pixels = lanedetection.persepctive2pixel()
 
     # read the lane lines on the map
     gt = data.get_lane_on_map(ego_pos)
     resampled_gt = data.resample_lane(gt)
-    gt_piexl = lanedetection.world2pixel(resampled_gt, camera_calibration, ego_pos)
+    gt_piexl = lanedetection.lanes2pixel(resampled_gt, camera_calibration, ego_pos)
     # comparing results with ground truth
     utils.plot_lane_on_map(image, lanes_on_pixels, gt_piexl)
+    # comparing results on perspective image
+    lanedetection.comparison_on_perseptive(gt_piexl, ego_pos, camera_calibration)
 
     # display offset on the image
-    input_img = lanedetection.display_offset(new_img)
-    output = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
+    # new_img = lanedetection.display_offset(new_img)
+    output = cv2.cvtColor(new_img, cv2.COLOR_BGR2RGB)
 
     utils.showImages(output)
     plt.show()
-    print('ok')
 
     cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
     camera_name = ["CAM_FRONT"]
-    scene_id = 3
+    scene_id = 87
     root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
     data = NuSceneProcessing(camera_name, scene_id, root_path)
     lanedetection = LaneDetection()
@@ -464,7 +535,7 @@ if __name__ == '__main__':
 
     samples = data.get_samples()
     if single_img:
-        current_samples = samples[14]
+        current_samples = samples[12]
         main(current_samples)
     else:
         current_samples = samples

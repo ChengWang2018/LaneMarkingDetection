@@ -52,6 +52,7 @@ def showImages(img, cols=1, rows=1, figsize=(15, 10), cmap=None):
 
 def plot_lane_on_map(image, lanes_on_vehicle_coords, gt):
     ''' Plot detected left and right lanes on the ground truth (map) and also plot the lane lines of the map'''
+    ''' Plot on image coordinate system'''
     fig, ax = plt.subplots(1, 1)
     for lane_on_vehicle_coords in lanes_on_vehicle_coords:
         coord_x = []
@@ -89,6 +90,25 @@ def plot_gt(gt, resampled_gt):
     for p in resampled_gt:
         ax.scatter(p[0], p[1], color='r')
 
+    plt.show()
+
+
+def plot_on_perspective(detected_lines, ego_pos, gt_persepctive):
+    '''plot detected lines and ground truth on the perspective image'''
+    fig, ax = plt.subplots(1, 1)
+
+    ax.scatter(detected_lines[1], detected_lines[0], color='b')
+    ax.scatter(detected_lines[2], detected_lines[0], color='b')
+    ax.scatter(ego_pos[0], ego_pos[1], color='y', label='Ego')
+
+    gt_x = []
+    gt_y = []
+    for gt in gt_persepctive:
+        gt_x.append(gt[0])
+        gt_y.append(gt[1])
+    ax.scatter(gt_x, gt_y, color='r')
+
+    plt.gca().invert_yaxis()
     plt.show()
 
 
