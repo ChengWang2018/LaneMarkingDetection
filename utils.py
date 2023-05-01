@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sympy import *
+from PIL import Image, ImageDraw
+from math import sqrt
 
 
 def visualizeLanes(image, ax):
@@ -50,17 +52,28 @@ def showImages(img, cols=1, rows=1, figsize=(15, 10), cmap=None):
     ax.axis('off')
 
 
-def plot_lane_on_map(image, lanes_on_vehicle_coords, gt):
+def plot_lane_on_map(cam_path, lanes_on_vehicle_coords, gt):
     ''' Plot detected left and right lanes on the ground truth (map) and also plot the lane lines of the map'''
     ''' Plot on image coordinate system'''
+    im = Image.open(cam_path)
+    im_size = im.size
+
     fig, ax = plt.subplots(1, 1)
+    color = (0, 255, 0)
+    thickness = 2
     for lane_on_vehicle_coords in lanes_on_vehicle_coords:
         coord_x = []
         coord_y = []
+        lane_points = []
         for coord in lane_on_vehicle_coords:
             coord_x.append(coord[0])
             coord_y.append(coord[1])
+            lane_points.append((coord[0], coord[1]))
         ax.plot(coord_x, coord_y, color='b')
+
+        # plot line on image
+        img1 = ImageDraw.Draw(im)
+        img1.line(lane_points, fill="blue", width=0)
 
     # plot the ground truth
     gt_x = []
@@ -69,13 +82,19 @@ def plot_lane_on_map(image, lanes_on_vehicle_coords, gt):
         gt_x.append(p[0])
         gt_y.append(p[1])
     ax.scatter(gt_x, gt_y, color='r')
-    plt.xlim([0, image.shape[1]])
-    plt.ylim([0, image.shape[0]])
+    plt.xlim([0, im_size[0]])
+    plt.ylim([0, im_size[1]])
     plt.gca().invert_yaxis()
+
+    # plot gt on image
+    img1 = ImageDraw.Draw(im)
+    img1.line(gt, fill="red", width=0)
+    im.show()
+
     plt.show()
 
 
-def plot_gt(gt, resampled_gt):
+def plot_gt(gt, middle_line, resampled_gt):
     '''plot the ground truth lane points and also the resampled ground truth'''
     fig, ax = plt.subplots(1, 1)
     # plot the ground truth
@@ -85,6 +104,10 @@ def plot_gt(gt, resampled_gt):
         gt_x.append(p[0])
         gt_y.append(p[1])
     ax.scatter(gt_x, gt_y, color='b')
+
+    # plot the middle line
+    for p in middle_line:
+        ax.scatter(p[0], p[1], color='y')
 
     # plot the resampled ground truth
     for p in resampled_gt:
@@ -114,7 +137,7 @@ def plot_on_perspective(detected_lines, ego_pos, gt_persepctive):
 
 def get_euclidean_distance(point1, point2):
     dist_square = (point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2
-    return np.sqrt(float(dist_square))
+    return sqrt(float(dist_square))
 
 
 def solve_equation(alpha, curr_point, next_point, dis):
@@ -127,12 +150,12 @@ def solve_equation(alpha, curr_point, next_point, dis):
          (curr_point[1] - y) ** 2 + (curr_point[0] - x) ** 2 - dis ** 2], [x, y])
 
     # get the value that is closer to the next point
-    dis = 9999
+    dis_temp = 9999
     solved = [None, None]
     for value in solved_values:
         dis_ = get_euclidean_distance(value, next_point)
-        if dis_ < dis:
-            dis = dis_
+        if dis_ < dis_temp:
+            dis_temp = dis_
             solved[0] = float(value[0])
             solved[1] = float(value[1])
     return solved

@@ -1,8 +1,9 @@
 import copy
 import copyreg
-
+from clip_points_behind_camera import clip_points_behind_camera
 from nuscenes.nuscenes import NuScenes
 from nuscenes.map_expansion.map_api import NuScenesMap
+from nuscenes.map_expansion import arcline_path_utils
 import matplotlib.pyplot as plt
 import numpy as np
 import cv2
@@ -253,36 +254,35 @@ class LaneDetection:
         return lanes_on_pixels
 
     @staticmethod
-    def world2pixel(point, camera_calibration, ego_pos, remove_behind=True):
-        point = np.array(point).reshape(-1, 1)
-        point = np.vstack((point, np.zeros((1, point.shape[1]))))
+    def world2pixel(points, camera_calibration, ego_pos, clipping=True):
+        near_plane = 1e-8
+
+        points = np.vstack((points, np.zeros((1, points.shape[1]))))
         # Transform into the ego vehicle frame for the timestamp of the image.
-        point = point - np.array(ego_pos['translation']).reshape((-1, 1))
-        point = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, point)
+        points = points - np.array(ego_pos['translation']).reshape((-1, 1))
+        points = np.dot(Quaternion(ego_pos['rotation']).rotation_matrix.T, points)
         # Transform into the camera.
-        point = point - np.array(camera_calibration['translation']).reshape((-1, 1))
-        point = np.dot(Quaternion(camera_calibration['rotation']).rotation_matrix.T, point)
+        points = points - np.array(camera_calibration['translation']).reshape((-1, 1))
+        points = np.dot(Quaternion(camera_calibration['rotation']).rotation_matrix.T, points)
 
         # Perform clipping on polygons that are partially behind the camera according to Z value.
-        if remove_behind and point[2] < 0:
-            return None
+        if clipping:
+            points = clip_points_behind_camera(points, near_plane)
 
         cam_intrinsic = np.array(camera_calibration["camera_intrinsic"])
         # Take the actual picture (matrix multiplication with camera-matrix + renormalization).
-        final_point = view_points(point, cam_intrinsic, normalize=True)
+        final_points = view_points(points, cam_intrinsic, normalize=True)
+        final_points = final_points[:2, :]
+        final_points = [(p0, p1) for (p0, p1) in zip(final_points[0], final_points[1])]
 
-        return final_point
+        return final_points
 
     def lanes2pixel(self, lanes, camera_calibration, ego_pos):
         '''transform the lane lines on a map to the pixel coordinate'''
-        final_points = []
-        for lane in lanes:
-            points = lane.T
-            for point in points:
-                final_point = self.world2pixel(point, camera_calibration, ego_pos)
-                if final_point is None:
-                    continue
-                final_points.append(final_point)
+        points = lanes[0]
+        for lane in lanes[1:]:
+            points = np.hstack((points, lane))
+        final_points = self.world2pixel(points, camera_calibration, ego_pos)
 
         return final_points
 
@@ -329,8 +329,9 @@ class LaneDetection:
 
         # get ego pos on perspective view
         point = np.array(ego_pos['translation'], dtype=float)[:2]
-        ego_pos_pixel = self.world2pixel(point, camera_calibration, ego_pos, remove_behind=False)
-        point = np.array([ego_pos_pixel[0], ego_pos_pixel[1]], dtype=float)
+        point = point.reshape(-1, 1)
+        ego_pos_pixel = self.world2pixel(point, camera_calibration, ego_pos, clipping=False)
+        point = np.array([ego_pos_pixel[0][0], ego_pos_pixel[0][1]], dtype=float)
         point = cv2.perspectiveTransform(point.reshape(-1, 1, 2), self.M)
         ego_pos_perspective = [point[0][0][0] * self.xm_per_pix, point[0][0][1] * self.ym_per_pix]
 
@@ -340,7 +341,8 @@ class LaneDetection:
             point = np.array([point[0], point[1]], dtype=float)
             perspective_point = cv2.perspectiveTransform(point.reshape(-1, 1, 2), self.M)
 
-            gt_persepctive.append([perspective_point[0][0][0] * self.xm_per_pix, perspective_point[0][0][1] * self.ym_per_pix])
+            gt_persepctive.append(
+                [perspective_point[0][0][0] * self.xm_per_pix, perspective_point[0][0][1] * self.ym_per_pix])
 
         # plot results
         utils.plot_on_perspective([ploty, lineLeft, lineRight], ego_pos_perspective, gt_persepctive)
@@ -370,8 +372,10 @@ class LaneDetection:
         # Draw info
         font = cv2.FONT_HERSHEY_SIMPLEX
         fontColor = (255, 255, 255)
-        cv2.putText(new_img, 'Left curvature: {:.0f} 1/m'.format(leftCurvature), (50, 50), font, fontScale, fontColor, 2)
-        cv2.putText(new_img, 'Right curvature: {:.0f} 1/m'.format(rightCurvature), (50, 120), font, fontScale, fontColor, 2)
+        cv2.putText(new_img, 'Left curvature: {:.0f} 1/m'.format(leftCurvature), (50, 50), font, fontScale, fontColor,
+                    2)
+        cv2.putText(new_img, 'Right curvature: {:.0f} 1/m'.format(rightCurvature), (50, 120), font, fontScale,
+                    fontColor, 2)
         cv2.putText(new_img, 'Vehicle is {} of center'.format(message), (50, 190), font, fontScale, fontColor, 2)
 
         return new_img
@@ -414,7 +418,8 @@ class NuSceneProcessing:
         return ego_pos
 
     def get_lane_on_map(self, ego_pos):
-        closest_lane_token = self.nusc_map.get_closest_lane(ego_pos['translation'][0], ego_pos['translation'][1], radius=2)
+        closest_lane_token = self.nusc_map.get_closest_lane(ego_pos['translation'][0], ego_pos['translation'][1],
+                                                            radius=2)
         try:
             closest_lane = self.nusc_map.get("lane", closest_lane_token)
         except KeyError as e:
@@ -425,34 +430,36 @@ class NuSceneProcessing:
         # we skip lane connector, because lane connector has irregular polygon points
         if closest_lane is not None:
             poly = self.nusc_map.get("polygon", closest_lane['polygon_token'])
-
             for point in poly['exterior_node_tokens']:
                 node = self.nusc_map.get('node', point)
                 point_xy.append([node['x'], node['y']])
 
             point_xy = np.array(point_xy)
-        return point_xy
 
-    @staticmethod
-    def resample_lane(gts):
+        lane_record = self.nusc_map.get_arcline_path(closest_lane_token)
+        middle_line = arcline_path_utils.discretize_lane(lane_record, resolution_meters=1)
+        return point_xy, middle_line
+
+    def resample_lane(self, gts, middle_line):
         '''resample the lane points at every 1 m'''
-        # if lateral distance larger than this threshold, it should belong to another lane
-        lane_thres = 3
         # resampled distance is 1 meter
         sample_dis = 1
 
-        # assign points to left and right lanes
-        lanes = []
-        points = []
-        for inx in range(len(gts)-1):
-            if np.abs(gts[inx+1][1] - gts[inx][1]) < lane_thres:
-                points.append(gts[inx])
+        p_x = [p[0] for p in middle_line]
+        p_y = [p[1] for p in middle_line]
+
+        coeff = np.polyfit(p_y, p_x, 2)
+        # assign points to left and right (two) lanes
+        lane1 = []
+        lane2 = []
+        for gt in gts:
+            fit_x = coeff[0] * gt[1] ** 2 + coeff[1] * gt[1] + coeff[2]
+            if gt[0] < fit_x:
+                lane1.append(gt)
             else:
-                points.append(gts[inx])
-                lanes.append(points)
-                points = []
-        points.append(gts[-1])
-        lanes.append(points)
+                lane2.append(gt)
+
+        lanes = [lane1, lane2]
 
         # resample each lane
         new_lanes = []
@@ -464,14 +471,16 @@ class NuSceneProcessing:
                 dx = next_point[0] - current_point[0]
                 dy = next_point[1] - current_point[1]
                 alpha = dy / dx
-                dis = np.sqrt(dx**2+dy**2)
-                dis = int(dis/sample_dis)
+                dis = np.sqrt(dx ** 2 + dy ** 2)
+                if dis < sample_dis:
+                    continue
+                dis = int(dis / sample_dis)
                 solved = utils.solve_equation(alpha, current_point, next_point, dis)
-                point_x.extend(np.linspace(current_point[0], solved[0], dis+1))
-                point_y.extend(np.linspace(current_point[1], solved[1], dis+1))
+                point_x.extend(np.linspace(current_point[0], solved[0], dis + 1))
+                point_y.extend(np.linspace(current_point[1], solved[1], dis + 1))
                 current_point = solved
-
-            new_lanes.append(np.array([point_x, point_y]))
+            if point_x and point_y:
+                new_lanes.append(np.array([point_x, point_y]))
         return new_lanes
 
 
@@ -480,7 +489,8 @@ def main(current_sample):
     cam_front_data, camera_calibration = data.get_img_info(current_sample)
 
     cam_intrinsic = np.array(camera_calibration['camera_intrinsic'])
-    image = cv2.imread(root_path + cam_front_data["filename"])
+    cam_path = root_path + cam_front_data["filename"]
+    image = cv2.imread(cam_path)
 
     # ego_pos
     ego_pos = data.get_ego_pos(cam_front_data)
@@ -491,6 +501,10 @@ def main(current_sample):
     SobelX = lanedetection.absSobelThresh(useSChannel, thresh_min=10, thresh_max=160)
     SobelY = lanedetection.absSobelThresh(useSChannel, orient='y', thresh_min=10, thresh_max=160)
     resultCombined = lanedetection.combineGradients(SobelX, SobelY)
+
+    sample_token = current_sample['token']
+    layer_names = ['lane']
+    data.nusc_map.render_map_in_image(data.nusc, sample_token, layer_names=layer_names, camera_channel=camera_name[0])
 
     # find the lane lines
     img_unwarp = lanedetection.perspective_transform(resultCombined)
@@ -505,11 +519,13 @@ def main(current_sample):
     lanes_on_pixels = lanedetection.persepctive2pixel()
 
     # read the lane lines on the map
-    gt = data.get_lane_on_map(ego_pos)
-    resampled_gt = data.resample_lane(gt)
+    gt, middle_line = data.get_lane_on_map(ego_pos)
+    resampled_gt = data.resample_lane(gt, middle_line)
     gt_piexl = lanedetection.lanes2pixel(resampled_gt, camera_calibration, ego_pos)
     # comparing results with ground truth
-    utils.plot_lane_on_map(image, lanes_on_pixels, gt_piexl)
+    utils.plot_lane_on_map(cam_path, lanes_on_pixels, gt_piexl)
+    # draw lanes and gt on the image
+
     # comparing results on perspective image
     lanedetection.comparison_on_perseptive(gt_piexl, ego_pos, camera_calibration)
 
@@ -541,4 +557,3 @@ if __name__ == '__main__':
         current_samples = samples
         for current_sample in current_samples:
             main(current_sample)
-
