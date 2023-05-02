@@ -59,8 +59,8 @@ def plot_lane_on_map(cam_path, lanes_on_vehicle_coords, gt):
     im_size = im.size
 
     fig, ax = plt.subplots(1, 1)
-    color = (0, 255, 0)
-    thickness = 2
+    color = ['#D49AB3', '#7A93B2']
+
     for lane_on_vehicle_coords in lanes_on_vehicle_coords:
         coord_x = []
         coord_y = []
@@ -73,14 +73,17 @@ def plot_lane_on_map(cam_path, lanes_on_vehicle_coords, gt):
 
         # plot line on image
         img1 = ImageDraw.Draw(im)
-        img1.line(lane_points, fill="blue", width=0)
+        img1.line(lane_points, fill=color[0], width=3)
 
     # plot the ground truth
     gt_x = []
     gt_y = []
+    gt_temp = []
     for p in gt:
-        gt_x.append(p[0])
-        gt_y.append(p[1])
+        if p[0] > 0 and p[1] > 0:
+            gt_x.append(p[0])
+            gt_y.append(p[1])
+            gt_temp.append((p[0], p[1]))
     ax.scatter(gt_x, gt_y, color='r')
     plt.xlim([0, im_size[0]])
     plt.ylim([0, im_size[1]])
@@ -88,7 +91,7 @@ def plot_lane_on_map(cam_path, lanes_on_vehicle_coords, gt):
 
     # plot gt on image
     img1 = ImageDraw.Draw(im)
-    img1.line(gt, fill="red", width=0)
+    img1.line(gt_temp, fill=color[1], width=3)
     im.show()
 
     plt.show()
@@ -120,10 +123,13 @@ def plot_on_perspective(detected_lines, ego_pos, gt_persepctive):
     '''plot detected lines and ground truth on the perspective image'''
     fig, ax = plt.subplots(1, 1)
 
-    ax.scatter(detected_lines[1], detected_lines[0], color='b')
-    ax.scatter(detected_lines[2], detected_lines[0], color='b')
+    for detected_line in detected_lines[1:]:
+        if detected_line is not None:
+            ax.scatter(detected_line, detected_lines[0], color='b')
+    # plot ego pos on the perspective image
     ax.scatter(ego_pos[0], ego_pos[1], color='y', label='Ego')
 
+    # plot ground truth on perspective image
     gt_x = []
     gt_y = []
     for gt in gt_persepctive:

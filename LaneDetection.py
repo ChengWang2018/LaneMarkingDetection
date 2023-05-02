@@ -1,5 +1,3 @@
-import copy
-import copyreg
 from clip_points_behind_camera import clip_points_behind_camera
 from nuscenes.nuscenes import NuScenes
 from nuscenes.map_expansion.map_api import NuScenesMap
@@ -11,6 +9,7 @@ from pyquaternion import Quaternion
 import utils
 import matplotlib
 from nuscenes.utils.geometry_utils import view_points
+import warnings
 
 matplotlib.use('TkAgg')
 
@@ -116,8 +115,11 @@ class LaneDetection:
         """
         Returns the curvature of the polynomial `fit` on the y range `yRange`.
         """
-        return ((1 + (2 * left_fit_cr[0] * yRange * self.ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
-            2 * left_fit_cr[0])
+        if left_fit_cr is not None:
+            return ((1 + (2 * left_fit_cr[0] * yRange * self.ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
+                2 * left_fit_cr[0])
+        else:
+            return None
 
     def drawLine(self, img):
         """
@@ -128,16 +130,27 @@ class LaneDetection:
         color_warp = np.zeros_like(img).astype(np.uint8)
 
         # Calculate points.
-        left_fitx = self.left_fit[0] * ploty ** 2 + self.left_fit[1] * ploty + self.left_fit[2]
-        right_fitx = self.right_fit[0] * ploty ** 2 + self.right_fit[1] * ploty + self.right_fit[2]
-
-        # Recast the x and y points into usable format for cv2.fillPoly()
-        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
-        pts = np.hstack((pts_left, pts_right))
+        if self.left_fit is not None and self.right_fit is not None:
+            left_fitx = self.left_fit[0] * ploty ** 2 + self.left_fit[1] * ploty + self.left_fit[2]
+            right_fitx = self.right_fit[0] * ploty ** 2 + self.right_fit[1] * ploty + self.right_fit[2]
+            # Recast the x and y points into usable format for cv2.fillPoly()
+            pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+            pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+            pts = np.hstack((pts_left, pts_right))
+        elif self.left_fit is not None and self.right_fit is None:
+            left_fitx = self.left_fit[0] * ploty ** 2 + self.left_fit[1] * ploty + self.left_fit[2]
+            pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+            pts = pts_left
+        elif self.left_fit is None and self.right_fit is not None:
+            right_fitx = self.right_fit[0] * ploty ** 2 + self.right_fit[1] * ploty + self.right_fit[2]
+            pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+            pts = pts_right
+        else:
+            pts = None
 
         # Draw the lane onto the warped blank image
-        cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+        if pts is not None:
+            cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
 
         # Warp the blank back to original image space using inverse perspective matrix (Minv)
         newwarp = cv2.warpPerspective(color_warp, self.Minv, (img.shape[1], img.shape[0]))
@@ -215,20 +228,33 @@ class LaneDetection:
         righty = nonzeroy[right_lane_inds]
 
         # Fit a second order polynomial to each
-        self.left_fit = np.polyfit(lefty, leftx, 2)
-        self.right_fit = np.polyfit(righty, rightx, 2)
+        self.left_fit = self.fit_curve(lefty, leftx)
+        self.right_fit = self.fit_curve(righty, rightx)
 
         # Fit a second order polynomial to each
-        self.left_fit_m = np.polyfit(lefty * self.ym_per_pix, leftx * self.xm_per_pix, 2)
-        self.right_fit_m = np.polyfit(righty * self.ym_per_pix, rightx * self.xm_per_pix, 2)
+        self.left_fit_m = self.fit_curve(lefty * self.ym_per_pix, leftx * self.xm_per_pix)
+        self.right_fit_m = self.fit_curve(righty * self.ym_per_pix, rightx * self.xm_per_pix)
 
         # return (
         #     left_fit_m, right_fit_m, left_lane_inds, right_lane_inds, out_img, nonzerox, nonzeroy)
 
     @staticmethod
+    def fit_curve(y, x):
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error')
+            try:
+                return np.polyfit(y, x, 2)
+            except np.RankWarning:
+                return None
+
+    @staticmethod
     def get_left_right_lane(left_fit, right_fit, ploty):
-        lineLeft = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
-        lineRight = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+        lineLeft = None
+        lineRight = None
+        if left_fit is not None:
+            lineLeft = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        if right_fit is not None:
+            lineRight = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
 
         return lineLeft, lineRight
 
@@ -241,15 +267,16 @@ class LaneDetection:
         lineLeft, lineRight = self.get_left_right_lane(self.left_fit, self.right_fit, ploty)
 
         for lane in [lineLeft, lineRight]:
-            lane_on_pixel = []
-            for u, v in zip(lane, ploty):
-                # get the point on original image
-                persepctive_points = np.array([u, v], dtype=float)
-                point = cv2.perspectiveTransform(persepctive_points.reshape(-1, 1, 2), self.Minv)
-                point = [point[0][0][0], point[0][0][1]]
+            if lane is not None:
+                lane_on_pixel = []
+                for u, v in zip(lane, ploty):
+                    # get the point on original image
+                    persepctive_points = np.array([u, v], dtype=float)
+                    point = cv2.perspectiveTransform(persepctive_points.reshape(-1, 1, 2), self.Minv)
+                    point = [point[0][0][0], point[0][0][1]]
 
-                lane_on_pixel.append(point)
-            lanes_on_pixels.append(lane_on_pixel)
+                    lane_on_pixel.append(point)
+                lanes_on_pixels.append(lane_on_pixel)
 
         return lanes_on_pixels
 
@@ -490,6 +517,8 @@ def main(current_sample):
 
     cam_intrinsic = np.array(camera_calibration['camera_intrinsic'])
     cam_path = root_path + cam_front_data["filename"]
+    # generated adversarial image by modifying the original image
+    # cam_path = root_path + 'generated-images' + '/regional80.jpg'
     image = cv2.imread(cam_path)
 
     # ego_pos
