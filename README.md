@@ -2,8 +2,9 @@
 This repo aims for evaluating a lane marking detection algorithm based on the Silent Testing concept.
 
 **Setup**:
-* Creating a conda environment, and install the `requirements.txt`
+* Creating a conda environment, and install the `requirements.txt`.
 * Download the [NuScene](https://nuscenes.org/nuscenes#download) Dataset and also install the [nuscenes-devkit](https://github.com/nutonomy/nuscenes-devkit).
+* The dataset and the devkit should be put at the same level of directory of the main code.
 
 **Run**
 * using the `GetResolution.ipynb` to get the pixel per meter in x and y directions.

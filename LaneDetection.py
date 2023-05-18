@@ -10,6 +10,7 @@ import utils
 import matplotlib
 from nuscenes.utils.geometry_utils import view_points
 import warnings
+import os
 
 matplotlib.use('TkAgg')
 
@@ -570,8 +571,14 @@ def main(current_sample):
 
 if __name__ == '__main__':
     camera_name = ["CAM_FRONT"]
+    # scene_id and sample_id are determined for the interested image
     scene_id = 87
-    root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
+    sample_id = 12
+    # get the current working directory
+    current_path = os.getcwd()
+    parent = os.path.dirname(current_path)
+
+    root_path = parent + '/data/sets/nuscenes/'
     data = NuSceneProcessing(camera_name, scene_id, root_path)
 
     source_points = np.array([[670, 555], [900, 555], [1350, 900], [240, 900]], dtype="float32")
@@ -582,7 +589,7 @@ if __name__ == '__main__':
 
     samples = data.get_samples()
     if single_img:
-        current_samples = samples[12]
+        current_samples = samples[sample_id]
         main(current_samples)
     else:
         current_samples = samples

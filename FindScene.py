@@ -1,5 +1,5 @@
 from nuscenes.nuscenes import NuScenes
-
+import os
 
 def get_samples(scene_id: int):
     '''get samples in a given scene'''
@@ -25,7 +25,11 @@ if __name__ == '__main__':
     ''' This function is used to find the scene id and sample id given the image name'''
 
     camera_name = ["CAM_FRONT"]
-    root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
+    # get the current working directory
+    current_path = os.getcwd()
+    parent = os.path.dirname(current_path)
+    root_path = parent + '/data/sets/nuscenes/'
+
     nusc = NuScenes(version='v1.0-trainval', dataroot='D:/Work/nuscene/data/sets/nuscenes', verbose=True)
 
     scene_found = False
