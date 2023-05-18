@@ -1,8 +1,11 @@
-# LaneMarkingDetection
-This repo aims for lane marking detection in the NuScene dataset
+# LaneMarkingDetectionAssessment - Silent Testing
+This repo aims for evaluating a lane marking detection algorithm based on the Silent Testing concept.
 
-**Determine meter per pixel**
-* using the dataset info
+**Setup**:
+* Creating a conda environment, and install the `requirements.txt`
+* Download the [NuScene](https://nuscenes.org/nuscenes#download) Dataset and also install the [nuscenes-devkit](https://github.com/nutonomy/nuscenes-devkit).
 
-**LaneMarkingDetection**
-* the code from udacity as a reference
+**Run**
+* using the `GetResolution.ipynb` to get the pixel per meter in x and y directions.
+* Enter the above values in `LaneDetection.py`, which also need the source points as input.
+* You can use the `FindScene.py` to find the scene and sample id given an image name
