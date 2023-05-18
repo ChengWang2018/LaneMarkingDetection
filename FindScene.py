@@ -1,19 +1,7 @@
 from nuscenes.nuscenes import NuScenes
-from nuscenes.map_expansion.map_api import NuScenesMap
-import matplotlib.pyplot as plt
-import numpy as np
-import cv2
-from pyquaternion import Quaternion
-import utils
-import matplotlib
-from nuscenes.utils.geometry_utils import view_points
-
-camera_name = ["CAM_FRONT"]
-root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
-nusc = NuScenes(version='v1.0-trainval', dataroot='D:/Work/nuscene/data/sets/nuscenes', verbose=True)
 
 
-def get_samples(scene_id):
+def get_samples(scene_id: int):
     '''get samples in a given scene'''
     current_sample = nusc.get('sample', nusc.scene[scene_id]['first_sample_token'])
     samples = []
@@ -25,7 +13,7 @@ def get_samples(scene_id):
 
 
 def get_img_info(sample):
-    # read the front camera info
+    '''read the front camera info'''
     cam_token = sample['data'][camera_name[0]]
     cam_front_data = nusc.get('sample_data', cam_token)
     camera_calibration = nusc.get('calibrated_sensor', cam_front_data['calibrated_sensor_token'])
@@ -34,12 +22,20 @@ def get_img_info(sample):
 
 
 if __name__ == '__main__':
+    ''' This function is used to find the scene id and sample id given the image name'''
+
+    camera_name = ["CAM_FRONT"]
+    root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
+    nusc = NuScenes(version='v1.0-trainval', dataroot='D:/Work/nuscene/data/sets/nuscenes', verbose=True)
+
     scene_found = False
+    # Given the image name that you are interested in
+    img_name = 'n008-2018-08-27-11-48-51-0400__CAM_FRONT__1535385098862404.jpg'
     for id, scene in enumerate(nusc.scene):
         samples = get_samples(id)
         for idx, sample in enumerate(samples):
             cam_front_data, camera_calibration = get_img_info(sample)
-            if cam_front_data["filename"] == 'samples/CAM_FRONT/n008-2018-08-01-15-16-36-0400__CAM_FRONT__1533151693612404.jpg':
+            if cam_front_data["filename"] == 'samples/CAM_FRONT/' + img_name:
                 print(scene)
                 print(idx)
                 print(id)

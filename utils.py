@@ -73,7 +73,7 @@ def plot_lane_on_map(cam_path, lanes_on_vehicle_coords, gt):
 
         # plot line on image
         img1 = ImageDraw.Draw(im)
-        img1.line(lane_points, fill=color[0], width=3)
+        img1.line(lane_points, fill='#FF0000', width=6)
 
     # plot the ground truth
     gt_x = []
@@ -91,9 +91,10 @@ def plot_lane_on_map(cam_path, lanes_on_vehicle_coords, gt):
 
     # plot gt on image
     img1 = ImageDraw.Draw(im)
-    img1.line(gt_temp, fill=color[1], width=3)
+    img1.line(gt_temp, fill='#0000FF', width=6)
     im.show()
 
+    im.save('detected_results.png')
     plt.show()
 
 

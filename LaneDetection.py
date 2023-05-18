@@ -15,7 +15,7 @@ matplotlib.use('TkAgg')
 
 
 class LaneDetection:
-    def __init__(self):
+    def __init__(self, source_points):
         self.right_fit_m = None
         self.left_fit_m = None
         self.right_fit = None
@@ -24,7 +24,7 @@ class LaneDetection:
         self.xm_per_pix = 0.00335
 
         # Point order: Top-Left, Top-Right, Bottom-Left, Bottom-Right
-        self.source_points = np.array([[670, 555], [900, 555], [1350, 900], [240, 900]], dtype="float32")
+        self.source_points = source_points #
         self.bottom_width = self.source_points[2, 0] - self.source_points[3, 0]
         self.height = self.source_points[2, 1] - self.source_points[0, 1]
 
@@ -518,7 +518,7 @@ def main(current_sample):
     cam_intrinsic = np.array(camera_calibration['camera_intrinsic'])
     cam_path = root_path + cam_front_data["filename"]
     # generated adversarial image by modifying the original image
-    # cam_path = root_path + 'generated-images' + '/regional80.jpg'
+    cam_path = root_path + 'generated-images' + '/regional80.jpg'
     image = cv2.imread(cam_path)
 
     # ego_pos
@@ -573,7 +573,9 @@ if __name__ == '__main__':
     scene_id = 87
     root_path = 'D:/Work/nuscene/data/sets/nuscenes/'
     data = NuSceneProcessing(camera_name, scene_id, root_path)
-    lanedetection = LaneDetection()
+
+    source_points = np.array([[670, 555], [900, 555], [1350, 900], [240, 900]], dtype="float32")
+    lanedetection = LaneDetection(source_points)
 
     # to process a single image or all images in a scene
     single_img = True
